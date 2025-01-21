@@ -266,3 +266,6 @@ class FeatureManager:
                         f"Feature {p.name} does not support upgrades between channels"
                     )
                     p.upgrade_hook(deployment)
+
+
+# DNM
