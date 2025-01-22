@@ -946,7 +946,7 @@ class AddJujuMachineStep(BaseStep, JujuStepHelper):
             machines = machines.get("machines", {})
 
             for machine, details in machines.items():
-                if self.machine_ip in details.get("ip-addresses"):
+                if self.machine_ip in details.get("ip-addresses", []):
                     LOG.debug("Machine already exists")
                     return Result(ResultType.SKIPPED, machine)
 
@@ -956,6 +956,19 @@ class AddJujuMachineStep(BaseStep, JujuStepHelper):
             return Result(ResultType.FAILED, str(e))
 
         return Result(ResultType.COMPLETED)
+
+    @tenacity.retry(
+        wait=tenacity.wait_fixed(5), stop=tenacity.stop_after_attempt(20), reraise=True
+    )
+    def _wait_for_machine(self, machine_ip: str) -> str:
+        """Wait for machine to report it's ip address."""
+        machines = self._juju_cmd("machines", "-m", self.model_with_owner)
+        LOG.debug(f"Found machines: {machines}")
+        machines = machines.get("machines", {})
+        for machine, details in machines.items():
+            if machine_ip in details.get("ip-addresses", []):
+                return machine
+        raise ValueError("Machine not found")
 
     def run(self, status: Status | None = None) -> Result:
         """Run the step to completion.
@@ -998,16 +1011,13 @@ class AddJujuMachineStep(BaseStep, JujuStepHelper):
 
             # TODO(hemanth): Need to wait until machine comes to started state
             # from planned state?
+            try:
+                machine = self._wait_for_machine(self.machine_ip)
+            except ValueError:
+                # respond with machine id as -1 if machine is not reflected in juju
+                machine = "-1"
 
-            machines = self._juju_cmd("machines", "-m", self.model_with_owner)
-            LOG.debug(f"Found machines: {machines}")
-            machines = machines.get("machines", {})
-            for machine, details in machines.items():
-                if self.machine_ip in details.get("ip-addresses"):
-                    return Result(ResultType.COMPLETED, machine)
-
-            # respond with machine id as -1 if machine is not reflected in juju
-            return Result(ResultType.COMPLETED, "-1")
+            return Result(ResultType.COMPLETED, machine)
         except pexpect.TIMEOUT as e:
             LOG.exception("Error adding machine {self.machine_ip} to Juju")
             LOG.warning(e)
