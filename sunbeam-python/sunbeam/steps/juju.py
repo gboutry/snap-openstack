@@ -13,14 +13,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-
 import itertools
 import json
 import logging
 import os
 import re
 import shutil
+import socket
 import subprocess
+import textwrap
 import time
 import typing
 from pathlib import Path
@@ -2239,4 +2240,39 @@ class MigrateModelStep(BaseStep, JujuStepHelper):
         except ValueError as e:
             return Result(ResultType.FAILED, str(e))
 
+        return Result(ResultType.COMPLETED)
+
+
+class CheckJujuReachableStep(BaseStep):
+    def __init__(self, juju_controller: JujuController | None):
+        super().__init__("Check Juju Reachable", "Checking if Juju is reachable")
+        self.juju_controller = juju_controller
+
+    def run(self, status: Status | None = None) -> Result:
+        """Check if Juju is reachable."""
+        if self.juju_controller is None:
+            return Result(ResultType.FAILED, "Juju controller not found")
+
+        all_failed = True
+        for address in self.juju_controller.api_endpoints:
+            host, port = address.split(":")
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+                sock.settimeout(5)
+                res = sock.connect_ex((host, int(port)))
+                if res == 0:
+                    all_failed = False
+
+        if all_failed:
+            addresses = ", ".join(self.juju_controller.api_endpoints)
+            return Result(
+                ResultType.FAILED,
+                textwrap.dedent(
+                    f"""\
+                    Juju Controller is not reachable, please check the following:
+                    - `OpenStack APIs IP ranges` is reachable from this host.
+                    - Firewall is not blocking the connection.
+
+                    Unreachable API endpoints: {addresses}"""
+                ),
+            )
         return Result(ResultType.COMPLETED)
