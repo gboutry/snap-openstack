@@ -117,6 +117,7 @@ from sunbeam.steps.juju import (
     AddJujuSpaceStep,
     BackupBootstrapUserStep,
     BootstrapJujuStep,
+    CheckJujuReachableStep,
     CreateJujuUserStep,
     JujuGrantModelAccessStep,
     JujuLoginStep,
@@ -1018,6 +1019,7 @@ def join(
     # Loads juju controller
     deployment.reload_credentials()
     plan2 = [
+        CheckJujuReachableStep(deployment.juju_controller),
         JujuLoginStep(deployment.juju_account),
         SaveJujuUserLocallyStep(name, data_location),
         RegisterJujuUserStep(client, name, deployment.controller, data_location),
