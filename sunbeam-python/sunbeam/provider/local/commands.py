@@ -1072,6 +1072,39 @@ def join(
                 manifest=manifest,
             )
         )
+        # Re-deploy control plane if this is the first storage node joining
+        # the cluster to enable mandatory storage services
+        storage_nodes = client.cluster.list_nodes_by_role(Role.STORAGE.name.lower())
+        if len(storage_nodes) == 1:
+            openstack_tfhelper = deployment.get_tfhelper("openstack-plan")
+            plan4.append(TerraformInitStep(openstack_tfhelper))
+            plan4.append(
+                DeployControlPlaneStep(
+                    deployment,
+                    openstack_tfhelper,
+                    jhelper,
+                    manifest,
+                    "auto",
+                    "auto",
+                    deployment.openstack_machines_model,
+                )
+            )
+            # Redeploy of Microceph is required to fill terraform vars
+            # related to traefik-rgw/keystone-endpoints offers from
+            # openstack model
+            microceph_tfhelper = deployment.get_tfhelper("microceph-plan")
+            plan4.append(TerraformInitStep(microceph_tfhelper))
+            plan4.append(
+                DeployMicrocephApplicationStep(
+                    deployment,
+                    client,
+                    microceph_tfhelper,
+                    jhelper,
+                    manifest,
+                    deployment.openstack_machines_model,
+                    refresh=True,
+                )
+            )
 
     if is_compute_node:
         plan4.extend(
