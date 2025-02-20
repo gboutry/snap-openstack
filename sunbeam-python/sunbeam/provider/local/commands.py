@@ -63,6 +63,7 @@ from sunbeam.core.common import (
     BaseStep,
     ResultType,
     Role,
+    click_option_database,
     click_option_topology,
     get_step_message,
     get_step_result,
@@ -547,24 +548,7 @@ def deploy_and_migrate_juju_controller(
     " Can be repeated and comma separated.",
 )
 @click_option_topology
-@click.option(
-    "--database",
-    default="auto",
-    type=click.Choice(
-        [
-            "auto",
-            "single",
-            "multi",
-        ],
-        case_sensitive=False,
-    ),
-    help=(
-        "Allows definition of the intended cluster configuration: "
-        "'auto' for automatic determination, "
-        "'single' for a single database, "
-        "'multi' for a database per service, "
-    ),
-)
+@click_option_database
 @click.option(
     "-c",
     "--controller",
