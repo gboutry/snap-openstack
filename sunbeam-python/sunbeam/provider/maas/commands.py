@@ -57,6 +57,8 @@ from sunbeam.core.common import (
     FORMAT_TABLE,
     FORMAT_YAML,
     BaseStep,
+    click_option_database,
+    click_option_topology,
     get_step_message,
     run_plan,
     str_presenter,
@@ -499,6 +501,8 @@ def _name_mapper(node: dict) -> str:
     help="Manifest file.",
     type=click.Path(exists=True, dir_okay=False, path_type=Path),
 )
+@click_option_topology
+@click_option_database
 @click_option_show_hints
 @click.pass_context
 def deploy(
@@ -506,6 +510,7 @@ def deploy(
     manifest_path: Path | None = None,
     accept_defaults: bool = False,
     topology: str = "auto",
+    database: str = "auto",
     show_hints: bool = False,
 ) -> None:
     """Deploy the MAAS-backed deployment.
@@ -682,8 +687,7 @@ def deploy(
             jhelper,
             manifest,
             topology,
-            # maas deployment always deploys multiple databases
-            "large",
+            database,
             deployment.openstack_machines_model,
             proxy_settings=proxy_settings,
         )
