@@ -1831,6 +1831,19 @@ class MaasDeployK8SApplicationStep(k8s.DeployK8SApplicationStep):
         """Return loadbalancer range from public space."""
         return self.ranges
 
+    def _get_loadbalancer_l2_interfaces(self) -> str | None:
+        """Return l2 interfaces to use for loadbalancer.
+
+        For maas mode, the interfaces are corresponding to infra,
+        internal and public spaces on any one of control nodes.
+        """
+        management_space = self.deployment.get_space(Networks.MANAGEMENT)
+        return maas_client.get_ifname_from_space(
+            self.maas_client,
+            management_space,
+            tags=maas_deployment.RoleTags.CONTROL.value,
+        )
+
     def is_skip(self, status: Status | None = None):
         """Determines if the step should be skipped or not."""
         public_space = self.deployment.get_space(Networks.PUBLIC)
