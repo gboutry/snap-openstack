@@ -2173,7 +2173,7 @@ class MigrateModelStep(BaseStep, JujuStepHelper):
 
     @tenacity.retry(
         wait=tenacity.wait_fixed(10),
-        stop=tenacity.stop_after_delay(300),
+        stop=tenacity.stop_after_delay(960),
         retry=tenacity.retry_if_exception_type(ValueError),
         reraise=True,
     )
