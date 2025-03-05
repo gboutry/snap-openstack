@@ -760,6 +760,7 @@ def deploy(
             client,
             tfhelper_hypervisor_deploy,
             tfhelper_openstack_deploy,
+            tfhelper_cinder_volume,
             jhelper,
             manifest,
             deployment.openstack_machines_model,
