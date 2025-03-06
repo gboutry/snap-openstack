@@ -22,11 +22,6 @@ jobs:
           working-directory: ./sunbeam-python
           run: tox -e cover
 
-        - name: Move results to necessary folder for TICS
-          working-directory: ${{ env.GITHUB_WORKSPACE }}
-          run: |
-            mv sunbeam-python/cover .
-
         - name: TICS
           uses: tiobe/tics-github-action@v3
           with:
