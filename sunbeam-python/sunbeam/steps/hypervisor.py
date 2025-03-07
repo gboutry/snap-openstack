@@ -67,6 +67,7 @@ class DeployHypervisorApplicationStep(DeployMachineApplicationStep):
         client: Client,
         tfhelper: TerraformHelper,
         openstack_tfhelper: TerraformHelper,
+        cinder_volume_tfhelper: TerraformHelper,
         jhelper: JujuHelper,
         manifest: Manifest,
         model: str,
@@ -87,6 +88,7 @@ class DeployHypervisorApplicationStep(DeployMachineApplicationStep):
         )
         self.openstack_tfhelper = openstack_tfhelper
         self.openstack_model = OPENSTACK_MODEL
+        self.cinder_volume_tfhelper = cinder_volume_tfhelper
 
     def extra_tfvars(self) -> dict:
         """Extra terraform vars to pass to terraform apply."""
@@ -111,8 +113,7 @@ class DeployHypervisorApplicationStep(DeployMachineApplicationStep):
         extra_tfvars = {offer: openstack_tf_output.get(offer) for offer in juju_offers}
 
         if len(storage_nodes) > 0:
-            cinder_volume_tfhelper = self.deployment.get_tfhelper("cinder-volume-plan")
-            cinder_volume_tf_output = cinder_volume_tfhelper.output()
+            cinder_volume_tf_output = self.cinder_volume_tfhelper.output()
 
             app_name_key = "cinder-volume-ceph-application-name"
             if app_name := cinder_volume_tf_output.get(app_name_key):

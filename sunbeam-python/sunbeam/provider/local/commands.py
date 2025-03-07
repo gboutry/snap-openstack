@@ -835,6 +835,7 @@ def bootstrap(
             client,
             hypervisor_tfhelper,
             openstack_tfhelper,
+            cinder_volume_tfhelper,
             jhelper,
             manifest,
             deployment.openstack_machines_model,
@@ -1107,6 +1108,8 @@ def join(
                 openstack_tfhelper,
             )
         )
+        cinder_volume_tfhelper = deployment.get_tfhelper("cinder-volume-plan")
+        plan4.append(TerraformInitStep(cinder_volume_tfhelper))
         # Re-deploy control plane if this is the first storage node joining
         # the cluster to enable mandatory storage services
         storage_nodes = client.cluster.list_nodes_by_role(Role.STORAGE.name.lower())
@@ -1139,8 +1142,6 @@ def join(
                 )
             )
             # Fill AMQP / Keystone / MySQL offers from openstack model
-            cinder_volume_tfhelper = deployment.get_tfhelper("cinder-volume-plan")
-            plan4.append(TerraformInitStep(cinder_volume_tfhelper))
             plan4.append(
                 DeployCinderVolumeApplicationStep(
                     deployment,
@@ -1161,6 +1162,7 @@ def join(
                 client,
                 hypervisor_tfhelper,
                 openstack_tfhelper,
+                cinder_volume_tfhelper,
                 jhelper,
                 manifest,
                 deployment.openstack_machines_model,
