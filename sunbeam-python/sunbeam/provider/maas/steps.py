@@ -1585,7 +1585,9 @@ class MaasConfigureMicrocephOSDStep(BaseStep):
     async def _list_disks(self, unit: str) -> tuple[dict, dict]:
         """Call list-disks action on an unit."""
         LOG.debug("Running list-disks on : %r", unit)
-        action_result = await self.jhelper.run_action(unit, self.model, "list-disks")
+        action_result = await self.jhelper.run_action(
+            unit, self.model, "list-disks", action_params={"host-only": True}
+        )
         LOG.debug(
             "Result after running action list-disks on %r: %r",
             unit,
