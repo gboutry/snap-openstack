@@ -460,7 +460,9 @@ class AddK8SCredentialStep(BaseStep, JujuStepHelper):
 class StoreK8SKubeConfigStep(BaseStep, JujuStepHelper):
     _KUBECONFIG = K8S_KUBECONFIG_KEY
 
-    def __init__(self, client: Client, jhelper: JujuHelper, model: str):
+    def __init__(
+        self, deployment: Deployment, client: Client, jhelper: JujuHelper, model: str
+    ):
         super().__init__(
             "Store K8S kubeconfig",
             "Storing K8S configuration in sunbeam database",
@@ -468,6 +470,7 @@ class StoreK8SKubeConfigStep(BaseStep, JujuStepHelper):
         self.client = client
         self.jhelper = jhelper
         self.model = model
+        self.deployment = deployment
 
     def is_skip(self, status: Status | None = None) -> Result:
         """Determines if the step should be skipped or not.
@@ -489,8 +492,12 @@ class StoreK8SKubeConfigStep(BaseStep, JujuStepHelper):
             LOG.debug(unit)
             leader_unit_management_ip = self._get_management_server_ip(unit)
             result = run_sync(
-                self.jhelper.run_action(unit, self.model, "get-kubeconfig",
-                                        action_params={"server": leader_unit_management_ip})
+                self.jhelper.run_action(
+                    unit,
+                    self.model,
+                    "get-kubeconfig",
+                    action_params={"server": leader_unit_management_ip},
+                )
             )
             LOG.debug(result)
             if not result.get("kubeconfig"):
@@ -512,19 +519,21 @@ class StoreK8SKubeConfigStep(BaseStep, JujuStepHelper):
 
     def _get_management_server_ip(self, leader_unit):
         """API server endpoint for the Kubernetes cluster."""
-        host_addresses = run_sync(
-            self.jhelper.run_cmd_on_machine_unit(leader_unit, self.model, 'hostname -I')
+        machines = run_sync(self.jhelper.get_machines(self.model))
+        machine_id = leader_unit.split("/")[-1]
+        machine_data = machines.get(machine_id).addresses
+        space_name = self.deployment.get_space(Networks.MANAGEMENT)
+        management_ip = next(
+            (
+                entry["value"]
+                for entry in machine_data
+                if entry.get("space-name") == space_name
+            ),
+            None,
         )
-        parsed_host_ips = host_addresses['stdout'].strip().split()
 
-        spaces = run_sync(self.jhelper.get_spaces(self.model))
-
-        infra_cidr = next((space['subnets'][0]['cidr']
-                           for space in spaces if space['name'] == 'infra'), None)
-        infra_network = ipaddress.ip_network(infra_cidr)
-        management_ip = next((ip for ip in parsed_host_ips
-                              if ipaddress.ip_address(ip) in infra_network), None)
         return f"{management_ip}:6443" if management_ip else None
+
 
 class _CommonK8SStepMixin:
     _SUBSTRATE: str = APPLICATION
