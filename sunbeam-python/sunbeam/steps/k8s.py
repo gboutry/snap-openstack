@@ -494,14 +494,20 @@ class StoreK8SKubeConfigStep(BaseStep, JujuStepHelper):
             )
             LOG.debug(unit)
             leader_unit_management_ip = self._get_management_server_ip(machine)
+            run_action_kwargs = (
+                {"action_params": {"server": leader_unit_management_ip}}
+                if leader_unit_management_ip
+                else {}
+            )
             result = run_sync(
                 self.jhelper.run_action(
                     unit,
                     self.model,
                     "get-kubeconfig",
-                    action_params={"server": leader_unit_management_ip},
+                    **run_action_kwargs,
                 )
             )
+
             LOG.debug(result)
             if not result.get("kubeconfig"):
                 return Result(
