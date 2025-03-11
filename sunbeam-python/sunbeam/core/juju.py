@@ -605,6 +605,24 @@ class JujuHelper:
             f"Leader for application {name!r} is missing from model {model!r}"
         )
 
+    async def get_leader_unit_machine(self, name: str, model: str) -> str:
+        """Get leader unit machine id.
+
+        :name: Application name
+        :model: Name of the model where the application is located
+        :returns: Machine entity id
+        """
+        application = await self.get_application(name, model)
+
+        for unit in application.units:
+            is_leader = await unit.is_leader_from_status()
+            if is_leader:
+                return unit.machine.entity_id
+
+        raise LeaderNotFoundException(
+            f"Leader for application {name!r} is missing from model {model!r}"
+        )
+
     async def run_cmd_on_machine_unit(
         self, name: str, model: str, cmd: str, timeout=None
     ):

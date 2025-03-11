@@ -489,8 +489,11 @@ class StoreK8SKubeConfigStep(BaseStep, JujuStepHelper):
         """Store K8S config in clusterd."""
         try:
             unit = run_sync(self.jhelper.get_leader_unit(APPLICATION, self.model))
+            machine = run_sync(
+                self.jhelper.get_leader_unit_machine(APPLICATION, self.model)
+            )
             LOG.debug(unit)
-            leader_unit_management_ip = self._get_management_server_ip(unit)
+            leader_unit_management_ip = self._get_management_server_ip(machine)
             result = run_sync(
                 self.jhelper.run_action(
                     unit,
@@ -517,10 +520,9 @@ class StoreK8SKubeConfigStep(BaseStep, JujuStepHelper):
 
         return Result(ResultType.COMPLETED)
 
-    def _get_management_server_ip(self, leader_unit):
+    def _get_management_server_ip(self, machine_id):
         """API server endpoint for the Kubernetes cluster."""
         machines = run_sync(self.jhelper.get_machines(self.model))
-        machine_id = leader_unit.split("/")[-1]
         machine_data = machines.get(machine_id).addresses
         space_name = self.deployment.get_space(Networks.MANAGEMENT)
         management_ip = next(

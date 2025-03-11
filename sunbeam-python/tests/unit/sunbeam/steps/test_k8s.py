@@ -194,7 +194,7 @@ users:
             "kubeconfig": kubeconfig_content,
         }
         self.jhelper.run_action.return_value = action_result
-        self.jhelper.get_leader_unit.return_value = "k8s/0"
+        self.jhelper.get_leader_unit_machine.return_value = "0"
 
         step = StoreK8SKubeConfigStep(
             self.deployment, self.client, self.jhelper, "test-model"
@@ -236,6 +236,7 @@ users:
     def test_run_action_failed(self):
         self.jhelper.run_action.side_effect = ActionFailedException("Action failed...")
         self.jhelper.get_leader_unit.return_value = "k8s/0"
+        self.jhelper.get_leader_unit_machine.return_value = "0"
 
         step = StoreK8SKubeConfigStep(
             self.deployment, self.client, self.jhelper, "test-model"
