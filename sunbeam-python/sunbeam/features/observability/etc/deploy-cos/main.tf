@@ -30,7 +30,7 @@ resource "juju_model" "cos" {
 
   cloud {
     name   = var.cloud
-    region = "localhost"
+    region = var.region
   }
 
   credential = var.credential
