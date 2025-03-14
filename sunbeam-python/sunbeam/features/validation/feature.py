@@ -16,7 +16,6 @@
 import logging
 import re
 import subprocess
-import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -546,9 +545,6 @@ class ValidationFeature(OpenStackControlPlaneFeature):
             int(unexpected_success_match.group(1)) if unexpected_success_match else 0
         )
 
-        if failed > 0 or unexpected_success > 0:
-            sys.exit(1)
-
         if output:
             # Due to shelling out to the juju cli (rather than using libjuju),
             # we need to ensure the juju cli is logged in.
@@ -557,6 +553,9 @@ class ValidationFeature(OpenStackControlPlaneFeature):
             self._copy_file_from_tempest_container(
                 deployment, TEMPEST_VALIDATION_RESULT, output
             )
+
+        if failed > 0 or unexpected_success > 0:
+            click.Abort()
 
     @click.command()
     def list_profiles(self) -> None:
