@@ -38,6 +38,12 @@ variable "grafana-agent-revision" {
   default     = null
 }
 
+variable "grafana-agent-base" {
+  description = "Base to use when deploying grafana agent machine charm"
+  type        = string
+  default     = "ubuntu@24.04"
+}
+
 variable "grafana-agent-config" {
   description = "Config to use when deploying grafana agent machine charm"
   type        = map(string)
