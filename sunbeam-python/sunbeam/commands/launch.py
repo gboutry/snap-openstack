@@ -59,11 +59,23 @@ def launch(
     snap = Snap()
     data_location = snap.paths.user_data
     deployment: Deployment = ctx.obj
+
+    is_bootstrapped = deployment.get_client().cluster.check_sunbeam_bootstrapped()
+    if not is_bootstrapped:
+        raise click.ClickException("Please run `sunbeam cluster bootstrap` first.")
+
+    compute_nodes = deployment.get_client().cluster.list_nodes_by_role("compute")
+    if not compute_nodes:
+        raise click.ClickException("No compute role found. Cannot launch instance.")
+
     jhelper = JujuHelper(deployment.get_connected_controller())
+
     with console.status("Fetching user credentials ... "):
         if not run_sync(jhelper.model_exists(OPENSTACK_MODEL)):
             LOG.error(f"Expected model {OPENSTACK_MODEL} missing")
-            raise click.ClickException("Please run `sunbeam cluster bootstrap` first")
+            raise click.ClickException(
+                f"Cannot find {OPENSTACK_MODEL}. Please destroy and re-bootstrap."
+            )
 
         admin_auth_info = retrieve_admin_credentials(jhelper, OPENSTACK_MODEL)
 
