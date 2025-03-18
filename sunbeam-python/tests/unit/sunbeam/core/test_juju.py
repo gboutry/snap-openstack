@@ -14,7 +14,7 @@
 
 import asyncio
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, Mock, patch
+from unittest.mock import AsyncMock, MagicMock, Mock, call, patch
 
 import pytest
 import yaml
@@ -642,6 +642,8 @@ class TestJujuActionHelper:
         mock_client = Mock()
         mock_jhelper = Mock()
         mock_client.cluster.get_node_info.return_value = {"machineid": "fakeid"}
+        side_effect = [Mock(), Mock()]
+        mock_run_sync.side_effect = side_effect
 
         juju.JujuActionHelper.get_unit(
             mock_client,
@@ -652,10 +654,15 @@ class TestJujuActionHelper:
         )
         mock_client.cluster.get_node_info.assert_called_once_with("fake-node")
         mock_jhelper.get_unit_from_machine.assert_called_once_with(
-            "fake-app", "fakeid", "fake-model"
+            "fake-app",
+            "fakeid",
+            side_effect[0],
         )
-        mock_run_sync.assert_called_once_with(
-            mock_jhelper.get_unit_from_machine.return_value
+        mock_run_sync.assert_has_calls(
+            [
+                call(mock_jhelper.get_model.return_value),
+                call(mock_jhelper.get_unit_from_machine.return_value),
+            ]
         )
 
     @patch("sunbeam.core.juju.JujuActionHelper.get_unit")
@@ -714,6 +721,7 @@ class TestJujuActionHelper:
                 "fake-action",
                 {"p1": "v1", "p2": "v2"},
             )
+
 
 @pytest.mark.asyncio
 async def test_wait_until_desired_status_for_apps(jhelper: juju.JujuHelper):

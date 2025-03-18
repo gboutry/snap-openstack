@@ -484,9 +484,8 @@ class EnableHypervisorStep(BaseStep, JujuStepHelper):
             return Result(ResultType.SKIPPED)
 
         try:
-            application = run_sync(
-                self.jhelper.get_application(APPLICATION, self.model)
-            )
+            model = run_sync(self.jhelper.get_model(self.model))
+            application = run_sync(self.jhelper.get_application(APPLICATION, model))
         except ApplicationNotFoundException as e:
             LOG.debug(str(e))
             return Result(

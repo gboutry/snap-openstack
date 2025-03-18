@@ -273,10 +273,11 @@ class WatcherApplicationExistsCheck(Check):
         Otherwise update self.message and return False.
         """
         try:
+            model = run_sync(self.jhelper.get_model(OPENSTACK_MODEL))
             run_sync(
                 self.jhelper.get_application(
                     name=WATCHER_APPLICATION,
-                    model=OPENSTACK_MODEL,
+                    model=model,
                 )
             )
         except ApplicationNotFoundException:

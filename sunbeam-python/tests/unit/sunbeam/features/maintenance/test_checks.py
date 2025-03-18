@@ -282,12 +282,25 @@ class TestWatcherApplicationExistsCheck:
     @patch("sunbeam.features.maintenance.checks.run_sync")
     def test_run(self, mock_run_sync):
         mock_jhelper = Mock()
+        side_effect = [
+            Mock(),  # Return juju model
+            Mock(),  # Return juju application
+        ]
+        mock_run_sync.side_effect = side_effect
+
         check = checks.WatcherApplicationExistsCheck(mock_jhelper)
         result = check.run()
         assert result
-        mock_run_sync.assert_called_once_with(mock_jhelper.get_application.return_value)
+        mock_run_sync.assert_has_calls(
+            [
+                call(mock_jhelper.get_model.return_value),
+                call(mock_jhelper.get_application.return_value),
+            ]
+        )
+        mock_jhelper.get_model.assert_called_once_with(OPENSTACK_MODEL)
         mock_jhelper.get_application.assert_called_once_with(
-            name=WATCHER_APPLICATION, model=OPENSTACK_MODEL
+            name=WATCHER_APPLICATION,
+            model=side_effect[0],
         )
 
     @patch("sunbeam.features.maintenance.checks.run_sync")

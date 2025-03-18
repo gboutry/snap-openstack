@@ -1853,7 +1853,8 @@ class JujuActionHelper:
         node_info = client.cluster.get_node_info(node)
         machine_id = str(node_info.get("machineid"))
 
-        return run_sync(jhelper.get_unit_from_machine(app, machine_id, model))
+        juju_model = run_sync(jhelper.get_model(model))
+        return run_sync(jhelper.get_unit_from_machine(app, machine_id, juju_model))
 
     @staticmethod
     def run_action(
