@@ -29,15 +29,19 @@ variable "principal-application-model" {
 variable "grafana-agent-channel" {
   description = "Channel to use when deploying grafana agent machine charm"
   type        = string
-  # Note: Currently, latest/stable is not available for grafana-agent. So,
-  # defaulting to latest/candidate.
-  default     = "latest/candidate"
+  default     = "latest/stable"
 }
 
 variable "grafana-agent-revision" {
   description = "Channel revision to use when deploying grafana agent machine charm"
   type        = number
   default     = null
+}
+
+variable "grafana-agent-base" {
+  description = "Base to use when deploying grafana agent machine charm"
+  type        = string
+  default     = "ubuntu@24.04"
 }
 
 variable "grafana-agent-config" {
