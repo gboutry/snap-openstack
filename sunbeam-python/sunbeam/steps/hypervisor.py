@@ -179,6 +179,28 @@ class DeployHypervisorApplicationStep(DeployMachineApplicationStep):
         return HYPERVISOR_APP_TIMEOUT
 
 
+class ReapplyHypervisorOptionalIntegrationsStep(DeployHypervisorApplicationStep):
+    """Reapply openstack-hypervisor optional integrations using Terraform cloud.
+
+    The optional integrations related to storage or any features will be reapplied
+    at this step. This is to ensure the integrations are created irrespective of
+    the order of the roles joining the cluster.
+
+    This class is similar to DeployHypervisorApplicationStep but it refreshes only
+    integrations after getting the necessary CMR offer URLs.
+    """
+
+    def tf_apply_extra_args(self) -> list:
+        """Extra args for the terraform apply command."""
+        return [
+            "-target=juju_integration.hypervisor-cert-distributor",
+            "-target=juju_integration.hypervisor-certs",
+            "-target=juju_integration.hypervisor-ceilometer",
+            "-target=juju_integration.hypervisor-cinder-ceph",
+            "-target=juju_integration.hypervisor-masakari",
+        ]
+
+
 class AddHypervisorUnitsStep(AddMachineUnitsStep):
     def __init__(
         self,
