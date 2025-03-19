@@ -112,6 +112,7 @@ from sunbeam.steps.clusterd import (
 from sunbeam.steps.hypervisor import (
     AddHypervisorUnitsStep,
     DeployHypervisorApplicationStep,
+    ReapplyHypervisorOptionalIntegrationsStep,
     ReapplyHypervisorTerraformPlanStep,
     RemoveHypervisorUnitStep,
 )
@@ -1156,7 +1157,7 @@ def join(
         hypervisor_tfhelper = deployment.get_tfhelper("hypervisor-plan")
         plan4.append(TerraformInitStep(hypervisor_tfhelper))
         plan4.append(
-            DeployHypervisorApplicationStep(
+            ReapplyHypervisorOptionalIntegrationsStep(
                 deployment,
                 client,
                 hypervisor_tfhelper,

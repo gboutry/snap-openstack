@@ -171,6 +171,7 @@ class TestDeployMachineApplicationStep:
             manifest,
             tfvar_config=tfconfig,
             override_tfvars={"machine_ids": machines, "machine_model": model},
+            tf_apply_extra_args=[],
         )
         assert result.result_type == ResultType.COMPLETED
 
