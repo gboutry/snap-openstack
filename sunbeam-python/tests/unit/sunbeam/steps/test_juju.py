@@ -58,6 +58,11 @@ def mock_open():
         yield p
 
 
+@pytest.fixture()
+def cclient():
+    yield Mock()
+
+
 class TestWriteJujuStatusStep:
     def test_is_skip(self, jhelper):
         with tempfile.NamedTemporaryFile() as tmpfile:
@@ -781,3 +786,50 @@ class TestRemoveSaasApplicationsStep:
         step._remote_app_to_delete = ["test-1"]
         result = step.run()
         assert result.result_type == ResultType.COMPLETED
+
+
+class TestBoostrapJujuStep:
+    def test_is_skip(self, mocker, cclient):
+        step = juju.BootstrapJujuStep(
+            cclient, "my-cloud", "my-cloud-type", "testcontroller"
+        )
+        mocker.patch.object(step, "get_clouds", return_value=["my-cloud"])
+        mocker.patch.object(
+            step,
+            "get_controller",
+            side_effect=juju.ControllerNotFoundException("Controller not found"),
+        )
+
+        result = step.is_skip()
+        assert result.result_type == ResultType.COMPLETED
+
+    def test_is_skip_when_controller_already_exists(self, mocker, cclient):
+        step = juju.BootstrapJujuStep(
+            cclient, "my-cloud", "my-cloud-type", "testcontroller"
+        )
+        mocker.patch.object(step, "get_clouds", return_value=["my-cloud"])
+        mocker.patch.object(step, "get_controller", return_value="testcontroller")
+
+        result = step.is_skip()
+        assert result.result_type == ResultType.SKIPPED
+
+    def test_run(self, mocker, snap, run, cclient):
+        mocker.patch.object(juju, "Snap", return_value=snap)
+        step = juju.BootstrapJujuStep(
+            cclient, "my-cloud", "my-cloud-type", "testcontroller"
+        )
+
+        result = step.run()
+        assert result.result_type == ResultType.COMPLETED
+
+    def test_run_when_boostrap_failed(self, mocker, snap, run, cclient):
+        mocker.patch.object(juju, "Snap", return_value=snap)
+        run.side_effect = subprocess.CalledProcessError(
+            cmd="juju bootstrap", returncode=1, output="Error output"
+        )
+        step = juju.BootstrapJujuStep(
+            cclient, "my-cloud", "my-cloud-type", "testcontroller"
+        )
+
+        result = step.run()
+        assert result.result_type == ResultType.FAILED
