@@ -152,7 +152,7 @@ EOF
 fi
 # Bootstrap juju onto LXD
 echo 'Bootstrapping Juju onto LXD'
-sudo --user $USER juju show-controller
+sudo --user $USER juju show-controller 2>/dev/null
 if [ $? -ne 0 ]; then
     sudo --user $USER juju bootstrap localhost
 fi
