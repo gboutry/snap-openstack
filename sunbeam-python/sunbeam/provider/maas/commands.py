@@ -24,6 +24,7 @@ from typing import Sequence, Tuple, Type
 
 import click
 import yaml
+from click.core import ParameterSource
 from rich.console import Console
 from rich.table import Table
 from snaphelpers import Snap
@@ -181,6 +182,7 @@ from sunbeam.steps.openstack import (
     DestroyControlPlaneStep,
     OpenStackPatchLoadBalancerServicesIPPoolStep,
     OpenStackPatchLoadBalancerServicesIPStep,
+    PromptDatabaseTopologyStep,
     PromptRegionStep,
 )
 from sunbeam.steps.sunbeam_machine import (
@@ -525,6 +527,14 @@ def deploy(
     """
     deployment: MaasDeployment = ctx.obj
 
+    parameter_source = click.get_current_context().get_parameter_source("database")
+    if parameter_source == ParameterSource.COMMANDLINE:
+        LOG.warning(
+            "WARNING: Option --database is deprecated and the value is ignored. "
+            "Instead user is prompted to select the database topology. "
+            "The database topology can also be set via manifest."
+        )
+
     preflight_checks: list[Check] = []
     preflight_checks.append(JujuSnapCheck())
     preflight_checks.append(LocalShareCheck())
@@ -621,6 +631,7 @@ def deploy(
 
     plan2: list[BaseStep] = []
 
+    plan2.append(PromptDatabaseTopologyStep(client, manifest, accept_defaults))
     plan2.append(PromptRegionStep(client, manifest, accept_defaults))
     plan2.append(TerraformInitStep(tfhelper_sunbeam_machine))
     plan2.append(
@@ -716,7 +727,6 @@ def deploy(
             jhelper,
             manifest,
             topology,
-            database,
             deployment.openstack_machines_model,
             proxy_settings=proxy_settings,
         )
