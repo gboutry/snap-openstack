@@ -48,7 +48,7 @@ from sunbeam.utils import pass_method_obj
 
 CERTIFICATE_FEATURE_KEY = "TlsProvider"
 # Time out for keystone to settle once ingress change relation data
-INGRESS_CHANGE_APPLICATION_TIMEOUT = 900
+INGRESS_CHANGE_APPLICATION_TIMEOUT = 1200
 LOG = logging.getLogger(__name__)
 console = Console()
 

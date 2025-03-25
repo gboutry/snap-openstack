@@ -30,7 +30,6 @@ from typing import (
     Awaitable,
     Dict,
     Iterable,
-    Sequence,
     TypedDict,
     TypeVar,
     cast,
@@ -1029,72 +1028,6 @@ class JujuHelper:
                 raise TimeoutException(
                     "Timed out while waiting for units"
                     f" {', '.join(name_set)} to be gone"
-                ) from e
-
-    async def wait_units_ready(
-        self,
-        units: Sequence[Unit | str],
-        model: str,
-        accepted_status: dict[str, list[str]] | None = None,
-        timeout: int | None = None,
-    ):
-        """Block execution until unit is ready.
-
-        The function early exits if the unit is missing from the model.
-
-        :units: Name of the units or Unit objects to wait for,
-            name format is application/id
-        :model: Name of the model where the unit is located
-        :accepted status: map of accepted statuses for "workload" and "agent"
-        :timeout: Waiting timeout in seconds
-        """
-        if accepted_status is None:
-            accepted_status = {}
-
-        agent_accepted_status = accepted_status.get("agent", ["idle"])
-        workload_accepted_status = accepted_status.get("workload", ["active"])
-
-        async with self.get_model_closing(model) as model_impl:
-            unit_list: list[Unit] = []
-            if isinstance(units, str):
-                units = [units]
-            for unit in units:
-                if isinstance(unit, str):
-                    self._validate_unit(unit)
-                    try:
-                        unit = await self.get_unit(unit, model_impl)
-                    except UnitNotFoundException as e:
-                        LOG.debug(str(e))
-                        return
-                unit_list.append(unit)
-
-            for unit in unit_list:
-                LOG.debug(
-                    f"Unit {unit.name!r} is in status: "
-                    f"agent={unit.agent_status!r}, workload={unit.workload_status!r}"
-                )
-
-            def condition() -> bool:
-                """Computes readiness for unit."""
-                for unit in unit_list:
-                    unit_impl = typing.cast(Unit, model_impl.units[unit.name])
-                    agent_ready = unit_impl.agent_status in agent_accepted_status
-                    workload_ready = (
-                        unit_impl.workload_status in workload_accepted_status
-                    )
-                    if not agent_ready or not workload_ready:
-                        return False
-                return True
-
-            try:
-                await model_impl.block_until(
-                    condition,
-                    timeout=timeout,
-                )
-            except asyncio.TimeoutError as e:
-                raise TimeoutException(
-                    "Timed out while waiting for units "
-                    f"{','.join(unit.name for unit in unit_list)} to be ready"
                 ) from e
 
     async def wait_all_machines_deployed(self, model: str, timeout: int | None = None):
