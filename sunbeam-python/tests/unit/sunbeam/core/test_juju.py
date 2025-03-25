@@ -640,7 +640,7 @@ async def test_wait_until_desired_status_for_apps(jhelper: juju.JujuHelper):
     _wait_until_status_coroutine = AsyncMock()
 
     with (
-        patch.object(jhelper, "get_model", return_value=model),
+        patch.object(jhelper, "get_model_closing", return_value=model),
         patch.object(
             jhelper, "_wait_until_status_coroutine", _wait_until_status_coroutine
         ),
@@ -651,8 +651,8 @@ async def test_wait_until_desired_status_for_apps(jhelper: juju.JujuHelper):
 
         assert _wait_until_status_coroutine.call_count == 2
         assert _wait_until_status_coroutine.call_args_list == [
-            ((model, "app1", None, None, {"active"}, None, None),),
-            ((model, "app2", None, None, {"active"}, None, None),),
+            (("control-plane", "app1", None, None, {"active"}, None, None),),
+            (("control-plane", "app2", None, None, {"active"}, None, None),),
         ]
         _wait_until_status_coroutine.reset_mock()
 
@@ -668,7 +668,7 @@ async def test_wait_until_desired_status_for_apps_with_units(jhelper: juju.JujuH
 
     _wait_until_status_coroutine = AsyncMock()
     with (
-        patch.object(jhelper, "get_model", return_value=model),
+        patch.object(jhelper, "get_model_closing", return_value=model),
         patch.object(
             jhelper, "_wait_until_status_coroutine", _wait_until_status_coroutine
         ),
@@ -678,7 +678,7 @@ async def test_wait_until_desired_status_for_apps_with_units(jhelper: juju.JujuH
         )
         assert _wait_until_status_coroutine.call_count == 1
         assert _wait_until_status_coroutine.call_args_list == [
-            ((model, "app1", ["app1/2"], None, {"blocked"}, None, None),),
+            (("control-plane", "app1", ["app1/2"], None, {"blocked"}, None, None),),
         ]
 
 
@@ -708,7 +708,7 @@ async def test_wait_until_desired_status_timeout(jhelper: juju.JujuHelper):
 
     with (
         patch("asyncio.gather", AsyncMock(side_effect=asyncio.TimeoutError)),
-        patch.object(jhelper, "get_model", return_value=model),
+        patch.object(jhelper, "get_model_closing", return_value=model),
         patch.object(
             jhelper, "_wait_until_status_coroutine", _wait_until_status_coroutine
         ),
@@ -720,7 +720,7 @@ async def test_wait_until_desired_status_timeout(jhelper: juju.JujuHelper):
 
         assert _wait_until_status_coroutine.call_count == 1
         assert _wait_until_status_coroutine.call_args_list == [
-            ((model, "app1", None, None, {"active"}, None, None),),
+            (("control-plane", "app1", None, None, {"active"}, None, None),),
         ]
 
 
@@ -735,7 +735,7 @@ async def test_wait_until_desired_status_task_exception(jhelper: juju.JujuHelper
     _wait_until_status_coroutine = AsyncMock(side_effect=ValueError)
 
     with (
-        patch.object(jhelper, "get_model", return_value=model),
+        patch.object(jhelper, "get_model_closing", return_value=model),
         patch.object(
             jhelper, "_wait_until_status_coroutine", _wait_until_status_coroutine
         ),
@@ -747,14 +747,14 @@ async def test_wait_until_desired_status_task_exception(jhelper: juju.JujuHelper
 
         assert _wait_until_status_coroutine.call_count == 1
         assert _wait_until_status_coroutine.call_args_list == [
-            ((model, "app1", None, None, {"active"}, None, None),),
+            (("control-plane", "app1", None, None, {"active"}, None, None),),
         ]
 
 
 @pytest.mark.asyncio
-async def test_wait_until_status_coroutine():
+async def test_wait_until_status_coroutine(jhelper: juju.JujuHelper):
     model = AsyncMock(spec=Model)
-
+    model.__aenter__.return_value = model
     model.get_status.return_value = AsyncMock(
         applications={
             "app1": Mock(
@@ -770,16 +770,18 @@ async def test_wait_until_status_coroutine():
         }
     )
     queue = asyncio.Queue(1)
-    await juju.JujuHelper._wait_until_status_coroutine(
-        model, "app1", None, queue, {"active"}, None
-    )
+    with patch.object(jhelper, "get_model_closing", return_value=model):
+        await jhelper._wait_until_status_coroutine(
+            "control-plane", "app1", None, queue, {"active"}, None
+        )
     assert model.get_status.call_count == 1
     assert "app1" == queue.get_nowait()
 
 
 @pytest.mark.asyncio
-async def test_wait_until_status_coroutine_unit_list():
+async def test_wait_until_status_coroutine_unit_list(jhelper: juju.JujuHelper):
     model = AsyncMock(spec=Model)
+    model.__aenter__.return_value = model
     model.get_status.return_value = AsyncMock(
         applications={
             "app1": Mock(
@@ -798,16 +800,17 @@ async def test_wait_until_status_coroutine_unit_list():
             )
         }
     )
-    await juju.JujuHelper._wait_until_status_coroutine(
-        model, "app1", ["app1/1"], None, None, None
-    )
+    with patch.object(jhelper, "get_model_closing", return_value=model):
+        await jhelper._wait_until_status_coroutine(
+            "control-plane", "app1", ["app1/1"], None, None, None
+        )
     assert model.get_status.call_count == 1
 
 
 @pytest.mark.asyncio
-async def test_wait_until_status_coroutine_cancelled():
+async def test_wait_until_status_coroutine_cancelled(jhelper: juju.JujuHelper):
     model = AsyncMock(spec=Model)
-
+    model.__aenter__.return_value = model
     model.get_status.return_value = AsyncMock(
         applications={
             "app1": Mock(
@@ -822,20 +825,23 @@ async def test_wait_until_status_coroutine_cancelled():
             )
         }
     )
-    task = asyncio.create_task(
-        juju.JujuHelper._wait_until_status_coroutine(
-            model, "app1", None, None, {"active"}, None
+    with patch.object(jhelper, "get_model_closing", return_value=model):
+        task = asyncio.create_task(
+            jhelper._wait_until_status_coroutine(
+                model, "app1", None, None, {"active"}, None
+            )
         )
-    )
     await asyncio.sleep(0.1)
     # cancelling the task should not raise an exception
     task.cancel()
 
 
 @pytest.mark.asyncio
-async def test_wait_until_status_coroutine_expected_workload_status():
+async def test_wait_until_status_coroutine_expected_workload_status(
+    jhelper: juju.JujuHelper,
+):
     model = AsyncMock(spec=Model)
-
+    model.__aenter__.return_value = model
     model.get_status.return_value = AsyncMock(
         applications={
             "app1": Mock(
@@ -850,16 +856,20 @@ async def test_wait_until_status_coroutine_expected_workload_status():
             )
         }
     )
-    await juju.JujuHelper._wait_until_status_coroutine(
-        model, "app1", None, None, {"blocked"}, None
-    )
+
+    with patch.object(jhelper, "get_model_closing", return_value=model):
+        await jhelper._wait_until_status_coroutine(
+            model, "app1", None, None, {"blocked"}, None
+        )
     assert model.get_status.call_count == 1
 
 
 @pytest.mark.asyncio
-async def test_wait_until_status_coroutine_expected_agent_status():
+async def test_wait_until_status_coroutine_expected_agent_status(
+    jhelper: juju.JujuHelper,
+):
     model = AsyncMock(spec=Model)
-
+    model.__aenter__.return_value = model
     model.get_status.return_value = AsyncMock(
         applications={
             "app1": Mock(
@@ -874,16 +884,19 @@ async def test_wait_until_status_coroutine_expected_agent_status():
             )
         }
     )
-    await juju.JujuHelper._wait_until_status_coroutine(
-        model, "app1", None, None, None, {"executing"}
-    )
+    with patch.object(jhelper, "get_model_closing", return_value=model):
+        await jhelper._wait_until_status_coroutine(
+            model, "app1", None, None, None, {"executing"}
+        )
     assert model.get_status.call_count == 1
 
 
 @pytest.mark.asyncio
-async def test_wait_until_status_coroutine_expected_workload_status_message():
+async def test_wait_until_status_coroutine_expected_workload_status_message(
+    jhelper: juju.JujuHelper,
+):
     model = AsyncMock(spec=Model)
-
+    model.__aenter__.return_value = model
     model.get_status.return_value = AsyncMock(
         applications={
             "app1": Mock(
@@ -898,26 +911,28 @@ async def test_wait_until_status_coroutine_expected_workload_status_message():
             )
         }
     )
-    await juju.JujuHelper._wait_until_status_coroutine(
-        model, "app1", ["app1/0"], None, None, {"executing"}, {"Under maintenance"}
-    )
+    with patch.object(jhelper, "get_model_closing", return_value=model):
+        await jhelper._wait_until_status_coroutine(
+            model, "app1", ["app1/0"], None, None, {"executing"}, {"Under maintenance"}
+        )
     assert model.get_status.call_count == 1
 
 
 @pytest.mark.asyncio
-async def test_wait_until_status_coroutine_missing_app():
+async def test_wait_until_status_coroutine_missing_app(jhelper: juju.JujuHelper):
     model = AsyncMock(spec=Model)
-
+    model.__aenter__.return_value = model
     model.get_status.return_value = AsyncMock(applications={})
     with pytest.raises(ValueError):
-        await juju.JujuHelper._wait_until_status_coroutine(model, "app1")
+        with patch.object(jhelper, "get_model_closing", return_value=model):
+            await jhelper._wait_until_status_coroutine("control-plane", "app1")
     assert model.get_status.call_count == 1
 
 
 @pytest.mark.asyncio
-async def test_wait_until_status_coroutine_subordinate():
+async def test_wait_until_status_coroutine_subordinate(jhelper: juju.JujuHelper):
     model = AsyncMock(spec=Model)
-
+    model.__aenter__.return_value = model
     model.get_status.return_value = AsyncMock(
         applications={
             "app1": Mock(
@@ -928,5 +943,6 @@ async def test_wait_until_status_coroutine_subordinate():
             )
         }
     )
-    await juju.JujuHelper._wait_until_status_coroutine(model, "app1")
+    with patch.object(jhelper, "get_model_closing", return_value=model):
+        await jhelper._wait_until_status_coroutine("control-plane", "app1")
     assert model.get_status.call_count == 1

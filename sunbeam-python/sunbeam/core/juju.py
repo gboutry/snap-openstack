@@ -304,6 +304,7 @@ class JujuHelper:
             yield model_impl
         finally:
             await model_impl.disconnect()
+            self.model_connectors.remove(model_impl)
 
     async def model_exists(self, model: str) -> bool:
         """Check if model exists.
@@ -1078,9 +1079,9 @@ class JujuHelper:
                 model, apps, status=["active"], timeout=timeout, queue=queue
             )
 
-    @staticmethod
     async def _wait_until_status_coroutine(
-        model: Model,
+        self,
+        model: str,
         app: str,
         unit_list: list[str] | None = None,
         queue: asyncio.queues.Queue | None = None,
@@ -1100,7 +1101,8 @@ class JujuHelper:
             expected_status = set(expected_status)
         try:
             while True:
-                status = await model.get_status([app])
+                async with self.get_model_closing(model) as model_impl:
+                    status = await model_impl.get_status([app])
                 if app not in status.applications:
                     raise ValueError(f"Application {app} not found in status")
                 application = typing.cast(
@@ -1191,62 +1193,55 @@ class JujuHelper:
             wl_status = set(status)
         if queue is not None and queue.maxsize < len(apps):
             raise ValueError("Queue size should be at least the number of applications")
-        async with self.get_model_closing(model) as model_impl:
-            LOG.debug("Waiting for apps %r to be %r", apps, wl_status)
+        LOG.debug("Waiting for apps %r to be %r", apps, wl_status)
 
-            tasks = []
-            for app in apps:
-                unit_list = (
-                    None if units is None else [unit for unit in units if app in unit]
+        tasks = []
+        for app in apps:
+            unit_list = (
+                None if units is None else [unit for unit in units if app in unit]
+            )
+            if unit_list:
+                LOG.debug(
+                    "Waiting for units %r of app %r to be %r",
+                    unit_list,
+                    app,
+                    wl_status,
                 )
-                if unit_list:
-                    LOG.debug(
-                        "Waiting for units %r of app %r to be %r",
-                        unit_list,
+            tasks.append(
+                asyncio.create_task(
+                    self._wait_until_status_coroutine(
+                        model,
                         app,
+                        unit_list,
+                        queue,
                         wl_status,
-                    )
-                tasks.append(
-                    asyncio.create_task(
-                        self._wait_until_status_coroutine(
-                            model_impl,
-                            app,
-                            unit_list,
-                            queue,
-                            wl_status,
-                            agent_status,
-                            workload_status_message,
-                        ),
-                        name=app,
-                    )
+                        agent_status,
+                        workload_status_message,
+                    ),
+                    name=app,
                 )
-            excs = []
-            try:
-                await asyncio.wait_for(
-                    asyncio.gather(*tasks, return_exceptions=True), timeout=timeout
-                )
-            except asyncio.TimeoutError as e:
-                raise TimeoutException(
-                    f"Timed out while waiting for model {model!r} to be ready"
-                ) from e
-            finally:
-                for task in tasks:
-                    task.cancel()
-                    if (
-                        task.done()
-                        and not task.cancelled()
-                        and (ex := task.exception())
-                    ):
-                        LOG.debug(
-                            "coroutine %r exception: %s", task.get_name(), str(ex)
-                        )
-                        excs.append(ex)
+            )
+        excs = []
+        try:
+            await asyncio.wait_for(
+                asyncio.gather(*tasks, return_exceptions=True), timeout=timeout
+            )
+        except asyncio.TimeoutError as e:
+            raise TimeoutException(
+                f"Timed out while waiting for model {model!r} to be ready"
+            ) from e
+        finally:
+            for task in tasks:
+                task.cancel()
+                if task.done() and not task.cancelled() and (ex := task.exception()):
+                    LOG.debug("coroutine %r exception: %s", task.get_name(), str(ex))
+                    excs.append(ex)
 
-            if excs:
-                # python 3.11 use ExceptionGroup
-                raise JujuWaitException(
-                    f"Error while waiting for model {model!r} to be ready", excs
-                )
+        if excs:
+            # python 3.11 use ExceptionGroup
+            raise JujuWaitException(
+                f"Error while waiting for model {model!r} to be ready", excs
+            )
 
     async def set_application_config(self, model: str, app: str, config: dict):
         """Update application configuration.
