@@ -214,6 +214,7 @@ class CoreConfig(pydantic.BaseModel):
 
     proxy: _ProxyConfig | None = None
     bootstrap: _BootstrapConfig | None = None
+    database: str | None = None
     region: str | None = None
     addons: _Addons | None = None
     k8s_addons: _K8sAddons | None = pydantic.Field(default=None, alias="k8s-addons")

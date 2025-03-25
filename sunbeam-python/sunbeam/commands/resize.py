@@ -15,6 +15,7 @@
 import logging
 
 import click
+from click.core import ParameterSource
 from rich.console import Console
 
 from sunbeam.clusterd.client import Client
@@ -36,7 +37,13 @@ console = Console()
 @click.command()
 @click_option_topology
 @click.option(
-    "-f", "--force", help="Force resizing to incompatible topology.", is_flag=True
+    "-f",
+    "--force",
+    help=(
+        "Force resizing to incompatible topology. "
+        "This option is deprecated and the value is ignored."
+    ),
+    is_flag=True,
 )
 @click_option_show_hints
 @click.pass_context
@@ -53,6 +60,10 @@ def resize(
     jhelper = JujuHelper(deployment.get_connected_controller())
 
     storage_nodes = client.cluster.list_nodes_by_role("storage")
+
+    parameter_source = click.get_current_context().get_parameter_source("force")
+    if parameter_source == ParameterSource.COMMANDLINE:
+        LOG.warning("WARNING: Option --force is deprecated and the value is ignored.")
 
     plan = []
     if len(storage_nodes):
@@ -86,9 +97,7 @@ def resize(
                 jhelper,
                 manifest,
                 topology,
-                "auto",
                 deployment.openstack_machines_model,
-                force=force,
             ),
         ]
     )
