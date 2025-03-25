@@ -23,6 +23,7 @@ from sunbeam.core.common import click_option_topology, run_plan
 from sunbeam.core.deployment import Deployment
 from sunbeam.core.juju import JujuHelper
 from sunbeam.core.terraform import TerraformInitStep
+from sunbeam.steps.cinder_volume import DeployCinderVolumeApplicationStep
 from sunbeam.steps.microceph import (
     DeployMicrocephApplicationStep,
     SetCephMgrPoolSizeStep,
@@ -57,6 +58,7 @@ def resize(
 
     openstack_tfhelper = deployment.get_tfhelper("openstack-plan")
     microceph_tfhelper = deployment.get_tfhelper("microceph-plan")
+    cinder_volume_tfhelper = deployment.get_tfhelper("cinder-volume-plan")
     jhelper = JujuHelper(deployment.get_connected_controller())
 
     storage_nodes = client.cluster.list_nodes_by_role("storage")
@@ -101,6 +103,24 @@ def resize(
             ),
         ]
     )
+
+    if len(storage_nodes):
+        # DeployCinderVolumeApplicationStep depends on openstack-tfhelper
+        # to get outputs, so let OpenStack deployment complete first
+        plan.extend(
+            [
+                TerraformInitStep(cinder_volume_tfhelper),
+                DeployCinderVolumeApplicationStep(
+                    deployment,
+                    client,
+                    cinder_volume_tfhelper,
+                    jhelper,
+                    manifest,
+                    deployment.openstack_machines_model,
+                    refresh=True,
+                ),
+            ]
+        )
 
     run_plan(plan, console, show_hints)
 
