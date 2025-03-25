@@ -2104,10 +2104,19 @@ class MaasClusterStatusStep(ClusterStatusStep):
 
     def models(self) -> list[str]:
         """List of models to query status from."""
-        return [
-            self.deployment.infra_model,
-            self.deployment.openstack_machines_model,
-        ]
+        models = [self.deployment.infra_model]
+        if run_sync(
+            self.jhelper.model_exists(self.deployment.openstack_machines_model)
+        ):
+            models.append(self.deployment.openstack_machines_model)
+            return models
+
+        LOG.debug(
+            f"Model {self.deployment.openstack_machines_model} not found. This is "
+            "expected when cluster is bootstrapped but not deployed yet. "
+            "Skipping model."
+        )
+        return models
 
     def _update_microcluster_status(self, status: dict, microcluster_status: dict):
         """How to update microcluster status in the status dict.
