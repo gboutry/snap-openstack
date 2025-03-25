@@ -41,7 +41,6 @@ from sunbeam.core.common import (
 )
 from sunbeam.core.deployment import Deployment
 from sunbeam.core.juju import (
-    ApplicationNotFoundException,
     JujuHelper,
     JujuStepHelper,
     JujuWaitException,
@@ -717,30 +716,23 @@ class WaitForApplicationsStep(BaseStep):
     def run(self, status: Status | None = None) -> Result:
         """Wait for applications to be idle."""
         LOG.debug(f"Application monitored for readiness: {self.apps}")
-        units = []
-        accepted_unit_status = {"agent": ["idle"], "workload": ["active"]}
-        model = run_sync(self.jhelper.get_model(self.model))
+        queue: asyncio.queues.Queue[str] = asyncio.queues.Queue(maxsize=len(self.apps))
+        task = run_sync(update_status_background(self, self.apps, queue, status))
         try:
-            for app in self.apps:
-                try:
-                    application = run_sync(self.jhelper.get_application(app, model))
-                    units.extend(application.units)
-                except ApplicationNotFoundException:
-                    # Ignore if the application is not found
-                    LOG.debug(f"Application {app} not found")
-
             run_sync(
-                self.jhelper.wait_units_ready(
-                    units,
+                self.jhelper.wait_until_desired_status(
                     self.model,
-                    accepted_status=accepted_unit_status,
+                    self.apps,
+                    status=["active"],
+                    agent_status=["idle"],
                     timeout=self.timeout,
+                    queue=queue,
                 )
             )
         except (JujuWaitException, TimeoutException) as e:
-            LOG.debug(str(e))
+            LOG.debug("Failed to wait for apps to settle", exc_info=True)
             return Result(ResultType.FAILED, str(e))
         finally:
-            run_sync(model.disconnect())
-
+            if not task.done():
+                task.cancel()
         return Result(ResultType.COMPLETED)

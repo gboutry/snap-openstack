@@ -453,22 +453,14 @@ async def test_jhelper_add_k8s_cloud_unsupported_kubeconfig(jhelper: juju.JujuHe
 
 test_data_k8s = [
     ("wait_application_ready", "k8s", "application 'k8s'", [["blocked"]]),
-    (
-        "wait_units_ready",
-        "k8s/0",
-        "units k8s/0",
-        [{"agent": "idle", "workload": "blocked"}],
-    ),
 ]
 
 test_data_custom_status = [
     ("wait_application_ready", "mk8s", ["unknown"]),
-    ("wait_units_ready", "k8s/1", {"agent": "unknown", "workload": "unknown"}),
 ]
 
 test_data_missing = [
     ("wait_application_ready", "mysql"),
-    ("wait_units_ready", "mysql/0"),
 ]
 
 
