@@ -78,7 +78,7 @@ class MaintenanceFeature(EnableDisableFeature):
 
     @click.group()
     def maintenance_group(self) -> None:
-        """Group command."""
+        """Manage maintenance mode."""
 
     def enabled_commands(self) -> dict[str, list[dict]]:
         """Dict of clickgroup along with commands.

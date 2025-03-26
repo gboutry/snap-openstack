@@ -1886,7 +1886,12 @@ class JujuActionHelper:
         """
         try:
             unit = JujuActionHelper.get_unit(client, jhelper, model, node, app)
-            LOG.debug("Running action '%s' on unit '%s'", action_name, unit.entity_id)
+            LOG.debug(
+                "Running action '%s' on unit '%s', params: %s",
+                action_name,
+                unit.entity_id,
+                action_params,
+            )
 
             action_result = run_sync(
                 jhelper.run_action(
