@@ -23,13 +23,13 @@ import os
 import subprocess
 import tempfile
 import typing
+from collections.abc import Collection
 from pathlib import Path
 from typing import (
     TYPE_CHECKING,
     AsyncGenerator,
     Awaitable,
     Dict,
-    Iterable,
     TypedDict,
     TypeVar,
     cast,
@@ -41,9 +41,12 @@ from juju import utils as juju_utils
 from juju.application import Application
 from juju.charmhub import CharmHub
 from juju.client import client as juju_client
+from juju.client import connection as juju_connection
+from juju.client import connector as juju_connector
 from juju.controller import Controller
 from juju.errors import (
     JujuAPIError,
+    JujuConnectionError,
     JujuError,
 )
 from juju.machine import Machine
@@ -51,6 +54,7 @@ from juju.model import Model
 from juju.unit import Unit
 from packaging import version
 from snaphelpers import Snap
+from websockets import ConnectionClosedError
 
 from sunbeam import utils
 from sunbeam.clusterd.client import Client
@@ -250,18 +254,132 @@ class JujuController(pydantic.BaseModel):
         return controller
 
 
+class _SharedStatusUpdater:
+    def __init__(self, jhelper: "JujuHelper", model: str):
+        self._jhelper = jhelper
+        self._condition = asyncio.Condition()
+        self._model = model
+        self._model_impl: Model | None = None
+
+    async def tick_status(
+        self, filter: list[str] | None = None
+    ) -> AsyncGenerator["juju_def.FullStatus", None]:
+        """Asynchronously yields the status of the Juju model when notified.
+
+        This coroutine continuously waits for the model to be ready and then
+        retrieves the status of the Juju model. It yields the status as an
+        asynchronous generator.
+
+        :filter: An Optional list of strings to filter the
+                status results.
+        :yield: Filtered full status of the Juju model.
+        """
+        while True:
+            async with self._condition:
+                await self._condition.wait()
+                # Coroutine is guaranteed to be notified when model is not None
+                model = typing.cast("Model", self._model_impl)
+                if not self.is_connected():
+                    continue
+                try:
+                    yield await model.get_status(filter)
+                except ConnectionClosedError:
+                    LOG.debug(
+                        "Connection to model %r lost, reconnecting later.",
+                        self._model,
+                    )
+                except asyncio.CancelledError:
+                    break
+
+    async def reconnect_model_and_notify_awaiters(self):
+        """Ensure the Juju model is ready for use and notify waiting tasks.
+
+        This method checks the connection status of the Juju controller and model,
+        attempting to reconnect if necessary. It handles various connection errors
+        and ensures that the model is connected before notifying all waiting tasks.
+        """
+        name = task.get_name() if (task := asyncio.current_task()) else "unknown"
+        async with self._condition:
+            if not self.is_connected():
+                try:
+                    if not self._jhelper.controller.is_connected():
+                        self._model_impl = None
+                        LOG.debug("%r: controller gone", name)
+                        await self._jhelper.reconnect()
+                        LOG.debug("%r: controller reconnected", name)
+                    if self._model_impl is not None:
+                        if not self._model_impl.is_connected():
+                            LOG.debug("%r: inner connection gone", name)
+                        else:
+                            LOG.debug(
+                                "%r: inner socket gone, connection status -> %r",
+                                name,
+                                self._model_impl.connection().monitor.status,
+                            )
+                            await self._model_impl.disconnect()
+                        self._model_impl = None
+                    if self._model_impl is None:
+                        self._model_impl = await self._jhelper.get_model(self._model)
+                        LOG.debug("%r: model connected", name)
+                except (
+                    juju_connector.NoConnectionException,
+                    JujuConnectionError,
+                    ConnectionClosedError,
+                    PermissionError,
+                ):
+                    LOG.debug(
+                        "%r: controller gone while trying to get model, reconnecting",
+                        name,
+                    )
+                    await self._jhelper.reconnect()
+                    LOG.debug("%r: controller reconnected", name)
+                except Exception:
+                    LOG.debug(
+                        "%r: error while ensuring connection, retrying later.",
+                        name,
+                        exc_info=True,
+                    )
+            if self._model_impl is not None and self.is_connected():
+                self._condition.notify_all()
+
+    def is_connected(self) -> bool:
+        """Check if model is connected."""
+        return (
+            self._model_impl is not None
+            and self._model_impl.is_connected()
+            and self._model_impl.connection().monitor.status
+            == juju_connection.Monitor.CONNECTED
+        )
+
+    async def disconnect(self):
+        """Disconnect model."""
+        if self._model_impl:
+            await self._model_impl.disconnect()
+            self._jhelper.model_connectors.remove(self._model_impl)
+            self._model_impl = None
+
+
 class JujuHelper:
     """Helper function to manage Juju apis through pylibjuju."""
 
     def __init__(self, controller: Controller):
         self.controller = controller
+        self._controller_params = controller.connection().connect_params()
         self.model_connectors: list[Model] = []
+
+    async def reconnect(self, **kwargs):
+        """Force reconnection to the controller."""
+        await self.disconnect()
+        del self.controller
+        self.controller = Controller()
+        await self.controller.connect(**kwargs, **self._controller_params)
 
     async def disconnect(self):
         """Disconnect all connections to juju controller."""
         LOG.debug("Disconnecting juju controller and model connections")
         for model in self.model_connectors:
             await model.disconnect()
+        self.model_connectors.clear()
         await self.controller.disconnect()
 
     async def get_clouds(self) -> dict:
@@ -1078,90 +1196,146 @@ class JujuHelper:
                 model, apps, status=["active"], timeout=timeout, queue=queue
             )
 
+    async def _model_ticker(self, shared_updater: _SharedStatusUpdater):
+        """Update model every 15 seconds.
+
+        This coroutine continuously updates the model by calling the
+        `shared_updater.reconnect_model_and_notify_awaiters` method every 15 seconds.
+        It runs indefinitely until cancelled.
+
+        :shared_updater: An instance of
+                _SharedStatusUpdater used to ensure the model is ready
+                and notify relevant parties.
+        """
+        try:
+            while True:
+                try:
+                    await shared_updater.reconnect_model_and_notify_awaiters()
+                except asyncio.CancelledError:
+                    # Prevent silencing CancelledError
+                    raise
+                except Exception:
+                    # silence exception to have the ticker retry
+                    LOG.debug(
+                        "Model ticker failed to reconnect, retrying.", exc_info=True
+                    )
+                await asyncio.sleep(15)
+        except asyncio.CancelledError:
+            LOG.debug("Model ticker cancelled")
+
+    @staticmethod
+    def _is_desired_status_achieved(
+        application_status: "juju_def.ApplicationStatus",
+        unit_list: Collection[str],
+        expected_status: Collection[str],
+        expected_agent_status: Collection[str] | None = None,
+        expected_workload_status_message: Collection[str] | None = None,
+    ):
+        """Check if the desired status is achieved for the given application.
+
+        :application_status: The status of the application.
+        :unit_list: List of unit names to check.
+        :expected_status: Expected workload status values.
+        :expected_agent_status: Expected agent status values.
+        :expected_workload_status_message: Expected workload status messages.
+        """
+        units = application_status.units
+        app_status: set[str] = set()
+        agent_status: set[str] = set()
+        workload_status_message: set[str] = set()
+        # Application is a subordinate, collect status from app instead of units
+        # as units is empty dictionary.
+        if application_status.subordinate_to:
+            if application_status.status:
+                app_status = {str(application_status.status.status)}
+        else:
+            for name, unit in units.items():
+                unit = typing.cast("juju_def.UnitStatus", unit)
+                if len(unit_list) == 0 or name in unit_list:
+                    if wl_status := unit.workload_status:
+                        app_status.add(str(wl_status.status))
+                        if _wl_status_message := wl_status.info:
+                            workload_status_message.add(str(_wl_status_message))
+                    if _agent_status := unit.agent_status:
+                        agent_status.add(str(_agent_status.status))
+
+        if len(unit_list) == 0:
+            # int_ is None on machine models
+            expected_unit_count = application_status.int_
+            unit_count = len(units)
+        else:
+            expected_unit_count = len(unit_list)
+            unit_count = len([unit for unit in units if unit in unit_list])
+
+        has_expected_unit_count = (
+            expected_unit_count is None or expected_unit_count == unit_count
+        )
+        has_expected_app_status = len(app_status) > 0 and app_status.issubset(
+            expected_status
+        )
+        has_expected_agent_status = (
+            expected_agent_status is None
+            or agent_status.issubset(expected_agent_status)
+        )
+        has_expected_workload_status_message = (
+            expected_workload_status_message is None
+            or len(workload_status_message) == 0  # No status message on workload
+            or workload_status_message.issubset(expected_workload_status_message)
+        )
+        return (
+            has_expected_unit_count
+            and has_expected_app_status
+            and has_expected_agent_status
+            and has_expected_workload_status_message
+        )
+
     @staticmethod
     async def _wait_until_status_coroutine(
-        model: Model,
+        shared_updater: _SharedStatusUpdater,
         app: str,
         unit_list: list[str] | None = None,
         queue: asyncio.queues.Queue | None = None,
-        expected_status: Iterable[str] | None = None,
-        expected_agent_status: Iterable[str] | None = None,
-        expected_workload_status_message: Iterable[str] | None = None,
+        expected_status: Collection[str] | None = None,
+        expected_agent_status: Collection[str] | None = None,
+        expected_workload_status_message: Collection[str] | None = None,
     ):
         """Worker function to wait for application's units workloads to be active.
 
-        Agent status is checked only if provided in input.
-        Workload status message is checked only if provided in input. Empty status
-        message is considered as an expected workload status message.
+        This coroutine periodically checks the status of the specified application and
+        its units, waiting until the desired status conditions are met.
+
+        :shared_updater: An instance of _SharedStatusUpdater to fetch status updates.
+        :app: The name of the application to monitor.
+        :unit_list: Optional list of specific units to check within the application.
+        :queue: Optional asyncio queue to notify when the application reaches
+                the desired status.
+        :expected_status: Optional collection of desired application statuses.
+        :expected_agent_status: Optional collection of desired agent statuses.
+        :expected_workload_status_message: Optional collection of desired workload
+                                           status messages.
         """
-        if expected_status is None:
-            expected_status = {"active"}
-        else:
-            expected_status = set(expected_status)
+        expected_status = expected_status or {"active"}
         try:
-            while True:
-                status = await model.get_status([app])
+            async for status in shared_updater.tick_status([app]):
                 if app not in status.applications:
                     raise ValueError(f"Application {app} not found in status")
-                application = typing.cast(
+                application_status = typing.cast(
                     "juju_def.ApplicationStatus", status.applications[app]
                 )
 
-                units = application.units
-                app_status: set[str] = set()
-                agent_status: set[str] = set()
-                workload_status_message: set[str] = set()
-                # Application is a subordinate, collect status from app instead of units
-                # as units is empty dictionary.
-                if application.subordinate_to:
-                    if application.status:
-                        app_status = {str(application.status.status)}
-                else:
-                    for name, unit in units.items():
-                        unit = typing.cast("juju_def.UnitStatus", unit)
-                        if unit_list is None or name in unit_list:
-                            if wl_status := unit.workload_status:
-                                app_status.add(str(wl_status.status))
-                                if _wl_status_message := wl_status.info:
-                                    workload_status_message.add(str(_wl_status_message))
-                            if _agent_status := unit.agent_status:
-                                agent_status.add(str(_agent_status.status))
-
-                if unit_list is None:
-                    # int_ is None on machine models
-                    expected_unit_count = application.int_
-                    unit_count = len(units)
-                else:
-                    expected_unit_count = len(unit_list)
-                    unit_count = len([unit for unit in units if unit in unit_list])
-
-                unit_count_cond = (
-                    expected_unit_count is None or expected_unit_count == unit_count
-                )
-                if (
-                    unit_count_cond
-                    and len(app_status) > 0
-                    and app_status.issubset(expected_status)
-                    and (
-                        expected_agent_status is None
-                        or agent_status.issubset(expected_agent_status)
-                    )
-                    and (
-                        expected_workload_status_message is None
-                        or len(workload_status_message)
-                        == 0  # No status message on workload
-                        or workload_status_message.issubset(
-                            expected_workload_status_message
-                        )
-                    )
+                if JujuHelper._is_desired_status_achieved(
+                    application_status,
+                    unit_list or [],
+                    expected_status,
+                    expected_agent_status,
+                    expected_workload_status_message,
                 ):
                     LOG.debug("Application %r is active", app)
                     # queue is sized for the number of coroutines,
                     # it should never throw QueueFull
                     if queue is not None:
                         queue.put_nowait(app)
-                    return
-                await asyncio.sleep(15)
+                    break
         except asyncio.CancelledError:
             LOG.debug("Waiting for %r cancelled", app)
 
@@ -1176,14 +1350,18 @@ class JujuHelper:
         timeout: int = 10 * 60,
         queue: asyncio.queues.Queue | None = None,
     ) -> None:
-        """Wait for all workloads in model to reach desired status.
+        """Wait for all workloads in the specified model to reach the desired status.
 
-        :model: Name of the model to wait for readiness
-        :apps: Applications to check the status for
-        :unit: Units to check the status for, if None, all units of the app
-        :status: Desired workload status list
-        :agent_status: Desired agent status list
-        :timeout: Waiting timeout in seconds
+        :model: Name of the model to wait for readiness.
+        :apps: Applications to check the status for.
+        :units: Units to check the status for. If None, all units of the
+                app will be checked.
+        :status: Desired workload status list. If None, defaults to {"active"}.
+        :agent_status: Desired agent status list.
+        :workload_status_message: List of desired workload status messages.
+        :timeout: Waiting timeout in seconds.
+        :queue: An asyncio queue to use for status updates. If provided,
+                its maxsize should be at least the number of applications.
         """
         if status is None:
             wl_status = {"active"}
@@ -1191,62 +1369,60 @@ class JujuHelper:
             wl_status = set(status)
         if queue is not None and queue.maxsize < len(apps):
             raise ValueError("Queue size should be at least the number of applications")
-        async with self.get_model_closing(model) as model_impl:
-            LOG.debug("Waiting for apps %r to be %r", apps, wl_status)
-
-            tasks = []
-            for app in apps:
-                unit_list = (
-                    None if units is None else [unit for unit in units if app in unit]
+        LOG.debug("Waiting for apps %r to be %r", apps, wl_status)
+        shared_updater = _SharedStatusUpdater(self, model)
+        tasks: list[asyncio.Task] = []
+        for app in apps:
+            unit_list = (
+                None if units is None else [unit for unit in units if app in unit]
+            )
+            if unit_list:
+                LOG.debug(
+                    "Waiting for units %r of app %r to be %r",
+                    unit_list,
+                    app,
+                    wl_status,
                 )
-                if unit_list:
-                    LOG.debug(
-                        "Waiting for units %r of app %r to be %r",
-                        unit_list,
+            tasks.append(
+                asyncio.create_task(
+                    self._wait_until_status_coroutine(
+                        shared_updater,
                         app,
+                        unit_list,
+                        queue,
                         wl_status,
-                    )
-                tasks.append(
-                    asyncio.create_task(
-                        self._wait_until_status_coroutine(
-                            model_impl,
-                            app,
-                            unit_list,
-                            queue,
-                            wl_status,
-                            agent_status,
-                            workload_status_message,
-                        ),
-                        name=app,
-                    )
+                        agent_status,
+                        workload_status_message,
+                    ),
+                    name=app,
                 )
-            excs = []
-            try:
-                await asyncio.wait_for(
-                    asyncio.gather(*tasks, return_exceptions=True), timeout=timeout
-                )
-            except asyncio.TimeoutError as e:
-                raise TimeoutException(
-                    f"Timed out while waiting for model {model!r} to be ready"
-                ) from e
-            finally:
-                for task in tasks:
-                    task.cancel()
-                    if (
-                        task.done()
-                        and not task.cancelled()
-                        and (ex := task.exception())
-                    ):
-                        LOG.debug(
-                            "coroutine %r exception: %s", task.get_name(), str(ex)
-                        )
-                        excs.append(ex)
+            )
+        updater_task = asyncio.create_task(
+            self._model_ticker(shared_updater), name="model-ticker"
+        )
+        excs = []
+        try:
+            await asyncio.wait_for(
+                asyncio.gather(*tasks, return_exceptions=True), timeout=timeout
+            )
+        except asyncio.TimeoutError as e:
+            raise TimeoutException(
+                f"Timed out while waiting for model {model!r} to be ready"
+            ) from e
+        finally:
+            for task in tasks:
+                task.cancel()
+                if task.done() and not task.cancelled() and (ex := task.exception()):
+                    LOG.debug("coroutine %r exception: %s", task.get_name(), str(ex))
+                    excs.append(ex)
+            updater_task.cancel()
+            await shared_updater.disconnect()
 
-            if excs:
-                # python 3.11 use ExceptionGroup
-                raise JujuWaitException(
-                    f"Error while waiting for model {model!r} to be ready", excs
-                )
+        if excs:
+            # python 3.11 use ExceptionGroup
+            raise JujuWaitException(
+                f"Error while waiting for model {model!r} to be ready", excs
+            )
 
     async def set_application_config(self, model: str, app: str, config: dict):
         """Update application configuration.
