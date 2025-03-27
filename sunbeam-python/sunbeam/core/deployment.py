@@ -217,9 +217,12 @@ class Deployment(pydantic.BaseModel):
             feature_manifest = FeatureManifest.model_validate(feature_manifest_dict)
             feature_config_type = feature.config_type()
             if feature_config_type:
-                feature_manifest.config = feature_config_type.model_validate(
-                    feature_config_dict
-                )
+                if feature_config_dict:
+                    feature_manifest.config = feature_config_type.model_validate(
+                        feature_config_dict
+                    )
+                else:
+                    feature_manifest.config = feature_config_type()
             return feature_manifest
 
         for name, feature_or_group_manifest_dict in feature_manifest_data.items():
