@@ -818,7 +818,7 @@ def validate_database_topologies(database: str):
 def database_topology_questions():
     return {
         "database": PromptQuestion(
-            "Enter database toplogy: single/multi (cannot be changed later)",
+            "Enter database topology: single/multi (cannot be changed later)",
             default_value=DEFAULT_DATABASE_TOPOLOGY,
             validation_function=validate_database_topologies,
             description=(
