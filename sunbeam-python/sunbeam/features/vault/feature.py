@@ -362,7 +362,7 @@ class VaultUnsealStep(BaseStep):
                                 OPENSTACK_MODEL,
                                 [VAULT_APPLICATION_NAME],
                                 units=non_leader_units,
-                                status=["active, blocked"],
+                                status=["active", "blocked"],
                                 agent_status=["idle"],
                                 workload_status_message=["Please unseal Vault"],
                                 timeout=VAULT_CHARM_UPDATES_TIMEOUT,
