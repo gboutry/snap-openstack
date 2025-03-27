@@ -19,8 +19,10 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 import pytest
 import yaml
 from juju.application import Application
+from juju.client import connector as juju_connector
 from juju.model import Model
 from juju.unit import Unit
+from websockets import ConnectionClosedError
 
 import sunbeam.core.juju as juju
 
@@ -628,47 +630,42 @@ class TestJujuStepHelper:
         assert not jsh.channel_update_needed("foo/stable", "ba/stable")
 
 
-@pytest.mark.asyncio
-async def test_wait_until_desired_status_for_apps(jhelper: juju.JujuHelper):
-    model = AsyncMock(spec=Model)
-    model.__aenter__.return_value = model
-    model.applications = {
-        "app1": None,
-        "app2": None,
-    }
+@pytest.fixture
+def shared_updater():
+    _SharedStatusUpdater_class = Mock()
+    shared_updater = AsyncMock(spec=juju._SharedStatusUpdater)
+    _SharedStatusUpdater_class.return_value = shared_updater
+    with patch("sunbeam.core.juju._SharedStatusUpdater", _SharedStatusUpdater_class):
+        yield shared_updater
 
+
+@pytest.mark.asyncio
+async def test_wait_until_desired_status_for_apps(
+    jhelper: juju.JujuHelper, shared_updater: juju._SharedStatusUpdater
+):
     _wait_until_status_coroutine = AsyncMock()
 
     with (
-        patch.object(jhelper, "get_model", return_value=model),
         patch.object(
             jhelper, "_wait_until_status_coroutine", _wait_until_status_coroutine
         ),
     ):
-        await jhelper.wait_until_desired_status(
-            "control-plane", list(model.applications)
-        )
+        await jhelper.wait_until_desired_status("control-plane", ["app1", "app2"])
 
         assert _wait_until_status_coroutine.call_count == 2
         assert _wait_until_status_coroutine.call_args_list == [
-            ((model, "app1", None, None, {"active"}, None, None),),
-            ((model, "app2", None, None, {"active"}, None, None),),
+            ((shared_updater, "app1", None, None, {"active"}, None, None),),
+            ((shared_updater, "app2", None, None, {"active"}, None, None),),
         ]
         _wait_until_status_coroutine.reset_mock()
 
 
 @pytest.mark.asyncio
-async def test_wait_until_desired_status_for_apps_with_units(jhelper: juju.JujuHelper):
-    model = AsyncMock(spec=Model)
-    model.__aenter__.return_value = model
-    model.applications = {
-        "app1": None,
-        "app2": None,
-    }
-
+async def test_wait_until_desired_status_for_apps_with_units(
+    jhelper: juju.JujuHelper, shared_updater: juju._SharedStatusUpdater
+):
     _wait_until_status_coroutine = AsyncMock()
     with (
-        patch.object(jhelper, "get_model", return_value=model),
         patch.object(
             jhelper, "_wait_until_status_coroutine", _wait_until_status_coroutine
         ),
@@ -678,7 +675,7 @@ async def test_wait_until_desired_status_for_apps_with_units(jhelper: juju.JujuH
         )
         assert _wait_until_status_coroutine.call_count == 1
         assert _wait_until_status_coroutine.call_args_list == [
-            ((model, "app1", ["app1/2"], None, {"blocked"}, None, None),),
+            ((shared_updater, "app1", ["app1/2"], None, {"blocked"}, None, None),),
         ]
 
 
@@ -696,135 +693,95 @@ async def test_wait_until_desired_status_invalid_queue(jhelper: juju.JujuHelper)
 
 
 @pytest.mark.asyncio
-async def test_wait_until_desired_status_timeout(jhelper: juju.JujuHelper):
+async def test_wait_until_desired_status_timeout(
+    jhelper: juju.JujuHelper, shared_updater: juju._SharedStatusUpdater
+):
     """Check wait_until_desired_status_for_apps behavior with nullable arguments."""
-    model = AsyncMock(spec=Model)
-    model.__aenter__.return_value = model
-    model.applications = {
-        "app1": None,
-    }
-
     _wait_until_status_coroutine = AsyncMock()
 
     with (
         patch("asyncio.gather", AsyncMock(side_effect=asyncio.TimeoutError)),
-        patch.object(jhelper, "get_model", return_value=model),
         patch.object(
             jhelper, "_wait_until_status_coroutine", _wait_until_status_coroutine
         ),
     ):
         with pytest.raises(juju.TimeoutException):
-            await jhelper.wait_until_desired_status(
-                "control-plane", list(model.applications)
-            )
+            await jhelper.wait_until_desired_status("control-plane", ["app1"])
 
         assert _wait_until_status_coroutine.call_count == 1
         assert _wait_until_status_coroutine.call_args_list == [
-            ((model, "app1", None, None, {"active"}, None, None),),
+            ((shared_updater, "app1", None, None, {"active"}, None, None),),
         ]
 
 
 @pytest.mark.asyncio
-async def test_wait_until_desired_status_task_exception(jhelper: juju.JujuHelper):
-    model = AsyncMock(spec=Model)
-    model.__aenter__.return_value = model
-    model.applications = {
-        "app1": None,
-    }
-
+async def test_wait_until_desired_status_task_exception(
+    jhelper: juju.JujuHelper, shared_updater: juju._SharedStatusUpdater
+):
     _wait_until_status_coroutine = AsyncMock(side_effect=ValueError)
 
     with (
-        patch.object(jhelper, "get_model", return_value=model),
         patch.object(
             jhelper, "_wait_until_status_coroutine", _wait_until_status_coroutine
         ),
     ):
         with pytest.raises(juju.JujuWaitException):
-            await jhelper.wait_until_desired_status(
-                "control-plane", list(model.applications)
-            )
+            await jhelper.wait_until_desired_status("control-plane", ["app1"])
 
         assert _wait_until_status_coroutine.call_count == 1
         assert _wait_until_status_coroutine.call_args_list == [
-            ((model, "app1", None, None, {"active"}, None, None),),
+            ((shared_updater, "app1", None, None, {"active"}, None, None),),
         ]
 
 
-@pytest.mark.asyncio
-async def test_wait_until_status_coroutine():
-    model = AsyncMock(spec=Model)
-
-    model.get_status.return_value = AsyncMock(
-        applications={
-            "app1": Mock(
-                int_=1,
-                subordinate_to=None,
-                units={
-                    "app1/0": Mock(
-                        workload_status=Mock(status="active"),
-                        agent_status=Mock(status="idle"),
-                    )
-                },
-            )
-        }
-    )
-    queue = asyncio.Queue(1)
-    await juju.JujuHelper._wait_until_status_coroutine(
-        model, "app1", None, queue, {"active"}, None
-    )
-    assert model.get_status.call_count == 1
-    assert "app1" == queue.get_nowait()
+async def async_gen(items):
+    for item in items:
+        yield item
 
 
 @pytest.mark.asyncio
-async def test_wait_until_status_coroutine_unit_list():
-    model = AsyncMock(spec=Model)
-    model.get_status.return_value = AsyncMock(
-        applications={
-            "app1": Mock(
-                int_=1,
-                subordinate_to=None,
-                units={
-                    "app1/0": Mock(
-                        workload_status=Mock(status="blocked"),
-                        agent_status=Mock(status="executing"),
-                    ),
-                    "app1/1": Mock(
-                        workload_status=Mock(status="active"),
-                        agent_status=Mock(status="idle"),
-                    ),
-                },
-            )
-        }
+@pytest.mark.parametrize(
+    "queue,expected_queue,desired_status",
+    [
+        (None, None, True),
+        (asyncio.Queue(1), "app1", True),
+        (asyncio.Queue(1), "app1", False),
+    ],
+)
+async def test_wait_until_status_coroutine(
+    shared_updater: juju._SharedStatusUpdater, queue, expected_queue, desired_status
+):
+    shared_updater.tick_status.return_value = async_gen(
+        [Mock(applications={"app1": Mock(status="active")})]
     )
-    await juju.JujuHelper._wait_until_status_coroutine(
-        model, "app1", ["app1/1"], None, None, None
-    )
-    assert model.get_status.call_count == 1
+    with patch.object(
+        juju.JujuHelper,
+        "_is_desired_status_achieved",
+        Mock(return_value=desired_status),
+    ):
+        await juju.JujuHelper._wait_until_status_coroutine(
+            shared_updater, "app1", None, queue, {"active"}, None
+        )
+    assert shared_updater.tick_status.call_count == 1
+    if queue:
+        if desired_status:
+            assert queue.get_nowait() == expected_queue
+        else:
+            with pytest.raises(asyncio.QueueEmpty):
+                queue.get_nowait()
 
 
 @pytest.mark.asyncio
-async def test_wait_until_status_coroutine_cancelled():
-    model = AsyncMock(spec=Model)
+async def test_wait_until_status_coroutine_cancelled(
+    shared_updater: juju._SharedStatusUpdater,
+):
+    async def _tick_status():
+        yield await asyncio.sleep(10)
 
-    model.get_status.return_value = AsyncMock(
-        applications={
-            "app1": Mock(
-                int_=1,
-                subordinate_to=None,
-                units={
-                    "app1/0": Mock(
-                        workload_status=Mock(status="blocked"),
-                        agent_status=Mock(status="idle"),
-                    )
-                },
-            )
-        }
-    )
+    shared_updater.tick_status.return_value = _tick_status()
     task = asyncio.create_task(
         juju.JujuHelper._wait_until_status_coroutine(
-            model, "app1", None, None, {"active"}, None
+            shared_updater, "app1", None, None, {"active"}, None
         )
     )
     await asyncio.sleep(0.1)
@@ -833,100 +790,370 @@ async def test_wait_until_status_coroutine_cancelled():
 
 
 @pytest.mark.asyncio
-async def test_wait_until_status_coroutine_expected_workload_status():
-    model = AsyncMock(spec=Model)
+async def test_wait_until_status_coroutine_missing_app(
+    shared_updater: juju._SharedStatusUpdater,
+):
+    status = AsyncMock(applications={})
+    shared_updater.tick_status.return_value = async_gen([status])
+    with pytest.raises(ValueError):
+        await juju.JujuHelper._wait_until_status_coroutine(shared_updater, "app1")
+    assert shared_updater.tick_status.call_count == 1
 
-    model.get_status.return_value = AsyncMock(
-        applications={
-            "app1": Mock(
-                int_=1,
+
+@pytest.mark.parametrize(
+    "application_status, unit_list, expected_status, expected_agent_status, expected_workload_status_message, expected_result",
+    [
+        # Test case where all conditions are met
+        (
+            Mock(
+                units={
+                    "app1/0": Mock(
+                        workload_status=Mock(status="active"),
+                        agent_status=Mock(status="idle"),
+                    ),
+                    "app1/1": Mock(
+                        workload_status=Mock(status="active"),
+                        agent_status=Mock(status="idle"),
+                    ),
+                },
                 subordinate_to=None,
+                status=None,
+                int_=2,
+            ),
+            [],
+            {"active"},
+            {"idle"},
+            None,
+            True,
+        ),
+        # Test case where workload status does not match
+        (
+            Mock(
                 units={
                     "app1/0": Mock(
                         workload_status=Mock(status="blocked"),
                         agent_status=Mock(status="idle"),
-                    )
+                    ),
                 },
-            )
-        }
-    )
-    await juju.JujuHelper._wait_until_status_coroutine(
-        model, "app1", None, None, {"blocked"}, None
-    )
-    assert model.get_status.call_count == 1
-
-
-@pytest.mark.asyncio
-async def test_wait_until_status_coroutine_expected_agent_status():
-    model = AsyncMock(spec=Model)
-
-    model.get_status.return_value = AsyncMock(
-        applications={
-            "app1": Mock(
-                int_=1,
                 subordinate_to=None,
+                status=None,
+                int_=1,
+            ),
+            [],
+            {"active"},
+            {"idle"},
+            None,
+            False,
+        ),
+        # Test case where agent status does not match
+        (
+            Mock(
                 units={
                     "app1/0": Mock(
                         workload_status=Mock(status="active"),
                         agent_status=Mock(status="executing"),
-                    )
+                    ),
                 },
-            )
-        }
-    )
-    await juju.JujuHelper._wait_until_status_coroutine(
-        model, "app1", None, None, None, {"executing"}
-    )
-    assert model.get_status.call_count == 1
-
-
-@pytest.mark.asyncio
-async def test_wait_until_status_coroutine_expected_workload_status_message():
-    model = AsyncMock(spec=Model)
-
-    model.get_status.return_value = AsyncMock(
-        applications={
-            "app1": Mock(
-                int_=1,
                 subordinate_to=None,
+                status=None,
+                int_=1,
+            ),
+            [],
+            {"active"},
+            {"idle"},
+            None,
+            False,
+        ),
+        # Test case where workload status message does not match
+        (
+            Mock(
                 units={
                     "app1/0": Mock(
-                        workload_status=Mock(status="active", info="Under maintenance"),
-                        agent_status=Mock(status="executing"),
-                    )
+                        workload_status=Mock(status="active", info="Error"),
+                        agent_status=Mock(status="idle"),
+                    ),
                 },
-            )
-        }
-    )
-    await juju.JujuHelper._wait_until_status_coroutine(
-        model, "app1", ["app1/0"], None, None, {"executing"}, {"Under maintenance"}
-    )
-    assert model.get_status.call_count == 1
-
-
-@pytest.mark.asyncio
-async def test_wait_until_status_coroutine_missing_app():
-    model = AsyncMock(spec=Model)
-
-    model.get_status.return_value = AsyncMock(applications={})
-    with pytest.raises(ValueError):
-        await juju.JujuHelper._wait_until_status_coroutine(model, "app1")
-    assert model.get_status.call_count == 1
-
-
-@pytest.mark.asyncio
-async def test_wait_until_status_coroutine_subordinate():
-    model = AsyncMock(spec=Model)
-
-    model.get_status.return_value = AsyncMock(
-        applications={
-            "app1": Mock(
-                int_=None,
+                subordinate_to=None,
+                status=None,
+                int_=1,
+            ),
+            [],
+            {"active"},
+            {"idle"},
+            {"Ready"},
+            False,
+        ),
+        (
+            Mock(
+                units={},
                 subordinate_to="app0",
                 status=Mock(status="active"),
-                units={"app1/0": Mock()},
-            )
-        }
+                int_=None,
+            ),
+            [],
+            {"active"},
+            None,
+            None,
+            True,
+        ),
+        # Test case where unit list is specified
+        (
+            Mock(
+                units={
+                    "app1/0": Mock(
+                        workload_status=Mock(status="active"),
+                        agent_status=Mock(status="idle"),
+                    ),
+                    "app1/1": Mock(
+                        workload_status=Mock(status="blocked"),
+                        agent_status=Mock(status="idle"),
+                    ),
+                },
+                subordinate_to=None,
+                status=None,
+                int_=2,
+            ),
+            ["app1/0"],
+            {"active"},
+            {"idle"},
+            None,
+            True,
+        ),
+    ],
+)
+def test_is_desired_status_achieved(
+    application_status,
+    unit_list,
+    expected_status,
+    expected_agent_status,
+    expected_workload_status_message,
+    expected_result,
+):
+    result = juju.JujuHelper._is_desired_status_achieved(
+        application_status,
+        unit_list,
+        expected_status,
+        expected_agent_status,
+        expected_workload_status_message,
     )
-    await juju.JujuHelper._wait_until_status_coroutine(model, "app1")
-    assert model.get_status.call_count == 1
+    assert result == expected_result
+
+
+@pytest.mark.asyncio
+async def test_model_ticker_runs_until_cancelled(jhelper: juju.JujuHelper):
+    shared_updater = Mock()
+    shared_updater.reconnect_model_and_notify_awaiters.return_value = asyncio.sleep(10)
+
+    ticker_task = asyncio.create_task(jhelper._model_ticker(shared_updater))
+
+    await asyncio.sleep(0.1)
+    ticker_task.cancel()
+
+    await ticker_task
+    assert ticker_task.done()
+
+
+@pytest.mark.asyncio
+async def test_model_ticker_silences_exceptions(jhelper: juju.JujuHelper):
+    shared_updater = AsyncMock()
+    shared_updater.reconnect_model_and_notify_awaiters.side_effect = Exception(
+        "Test exception"
+    )
+    ticker_task = asyncio.create_task(jhelper._model_ticker(shared_updater))
+    await asyncio.sleep(0.1)
+
+    ticker_task.cancel()
+    assert shared_updater.reconnect_model_and_notify_awaiters.call_count > 0
+    await ticker_task
+
+
+@pytest.mark.asyncio
+async def test_tick_status_yields_status(jhelper: juju.JujuHelper):
+    status_mock = Mock()
+    shared_updater = juju._SharedStatusUpdater(jhelper, "control-plane")
+    shared_updater._model_impl = AsyncMock()
+    shared_updater._model_impl.get_status.return_value = status_mock
+
+    with patch.object(shared_updater, "is_connected", Mock(return_value=True)):
+
+        async def unlock():
+            await asyncio.sleep(0.1)
+            async with shared_updater._condition:
+                shared_updater._condition.notify_all()
+
+        gen = shared_updater.tick_status()
+        asyncio.create_task(unlock())
+        result = await gen.__anext__()
+
+    assert result == status_mock
+    shared_updater._model_impl.get_status.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_tick_status_retries_on_connection_closed_error(
+    jhelper: juju.JujuHelper,
+):
+    status_mock = Mock()
+    shared_updater = juju._SharedStatusUpdater(jhelper, "control-plane")
+    shared_updater._model_impl = AsyncMock()
+    shared_updater._model_impl.get_status.side_effect = [
+        ConnectionClosedError("Test error", None),
+        status_mock,
+    ]
+
+    with patch.object(shared_updater, "is_connected", Mock(return_value=True)):
+
+        async def unlock():
+            for i in range(2):
+                await asyncio.sleep(0.1)
+                async with shared_updater._condition:
+                    shared_updater._condition.notify_all()
+
+        gen = shared_updater.tick_status()
+        asyncio.create_task(unlock())
+        result = await gen.__anext__()
+
+    assert result == status_mock
+    assert shared_updater._model_impl.get_status.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_tick_status_handles_cancelled_error(
+    jhelper: juju.JujuHelper,
+):
+    shared_updater = juju._SharedStatusUpdater(jhelper, "control-plane")
+    shared_updater._model_impl = Mock()
+    task = asyncio.create_task(asyncio.sleep(10))
+    await asyncio.sleep(0.1)
+    task.cancel()
+    shared_updater._model_impl.get_status.return_value = task
+
+    with patch.object(shared_updater, "is_connected", Mock(return_value=True)):
+
+        async def unlock():
+            for i in range(2):
+                await asyncio.sleep(0.1)
+                async with shared_updater._condition:
+                    shared_updater._condition.notify_all()
+
+        gen = shared_updater.tick_status()
+        asyncio.create_task(unlock())
+        await asyncio.sleep(0.2)
+        with pytest.raises(StopAsyncIteration):
+            await gen.__anext__()
+
+    shared_updater._model_impl.get_status.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_tick_status_skips_when_not_connected(
+    jhelper: juju.JujuHelper,
+):
+    shared_updater = juju._SharedStatusUpdater(jhelper, "control-plane")
+    shared_updater._model_impl = AsyncMock()
+    shared_updater._model_impl.get_status.return_value = None
+
+    with patch.object(shared_updater, "is_connected", Mock(side_effect=[False, True])):
+
+        async def unlock():
+            for i in range(2):
+                await asyncio.sleep(0.1)
+                async with shared_updater._condition:
+                    shared_updater._condition.notify_all()
+
+        gen = shared_updater.tick_status()
+        asyncio.create_task(unlock())
+        await asyncio.sleep(0.1)
+        await gen.__anext__()
+
+    shared_updater._model_impl.get_status.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_reconnect_model_and_notify_awaiters_connected():
+    jhelper = Mock()
+    shared_updater = juju._SharedStatusUpdater(jhelper, "control-plane")
+    shared_updater._condition = AsyncMock()
+    shared_updater._model_impl = AsyncMock()
+    with patch.object(shared_updater, "is_connected", Mock(return_value=True)):
+        await shared_updater.reconnect_model_and_notify_awaiters()
+    shared_updater._condition.notify_all.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_reconnect_model_and_notify_awaiters_reconnect_controller():
+    jhelper = AsyncMock()
+    jhelper.controller.is_connected = Mock(return_value=False)
+    jhelper.get_model.return_value = AsyncMock()
+    shared_updater = juju._SharedStatusUpdater(jhelper, "control-plane")
+    shared_updater._condition = AsyncMock()
+    is_connected_mock = Mock(side_effect=[False, True])
+    mocker = patch.object(shared_updater, "is_connected", is_connected_mock)
+    mocker.start()
+    await shared_updater.reconnect_model_and_notify_awaiters()
+    mocker.stop()
+    assert is_connected_mock.call_count == 2
+
+    jhelper.reconnect.assert_called_once()
+    shared_updater._condition.notify_all.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_reconnect_model_and_notify_awaiters_inner_connection_gone():
+    jhelper = AsyncMock()
+    jhelper.controller.is_connected = Mock(return_value=True)
+    shared_updater = juju._SharedStatusUpdater(jhelper, "control-plane")
+    shared_updater._condition = AsyncMock()
+    shared_updater._model_impl = AsyncMock()
+    shared_updater._model_impl.is_connected = Mock(return_value=False)
+    with patch.object(shared_updater, "is_connected", Mock(side_effect=[False, True])):
+        await shared_updater.reconnect_model_and_notify_awaiters()
+    shared_updater._model_impl.disconnect.assert_not_called()
+    jhelper.get_model.assert_called_once_with("control-plane")
+    shared_updater._condition.notify_all.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_reconnect_model_and_notify_awaiters_inner_socket_gone():
+    jhelper = AsyncMock()
+    jhelper.controller.is_connected = Mock(return_value=True)
+    shared_updater = juju._SharedStatusUpdater(jhelper, "control-plane")
+    shared_updater._condition = AsyncMock()
+    shared_updater._model_impl = AsyncMock()
+    shared_updater._model_impl.is_connected = Mock(return_value=True)
+    shared_updater._model_impl.connection = Mock(
+        return_value=Mock(monitor=Mock(status="closed"))
+    )
+    disconnect_mock = AsyncMock()
+    shared_updater._model_impl.disconnect = disconnect_mock
+    with patch.object(shared_updater, "is_connected", Mock(side_effect=[False, True])):
+        await shared_updater.reconnect_model_and_notify_awaiters()
+    disconnect_mock.assert_called_once()
+    jhelper.get_model.assert_called_once_with("control-plane")
+    shared_updater._condition.notify_all.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_reconnect_model_and_notify_awaiters_reconnects_on_no_connection():
+    jhelper = AsyncMock()
+    shared_updater = juju._SharedStatusUpdater(jhelper, "control-plane")
+    shared_updater._condition = AsyncMock()
+    shared_updater._model_impl = None
+    jhelper.get_model.side_effect = juju_connector.NoConnectionException
+    with patch.object(shared_updater, "is_connected", Mock(return_value=False)):
+        await shared_updater.reconnect_model_and_notify_awaiters()
+    jhelper.reconnect.assert_called_once()
+    shared_updater._condition.notify_all.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_reconnect_model_and_notify_awaiters_silences_unknown_exceptions():
+    jhelper = AsyncMock()
+    jhelper.controller.is_connected = Mock(side_effect=ValueError)
+    shared_updater = juju._SharedStatusUpdater(jhelper, "control-plane")
+    shared_updater._condition = AsyncMock()
+    shared_updater._model_impl = None
+    with patch.object(shared_updater, "is_connected", Mock(return_value=False)):
+        await shared_updater.reconnect_model_and_notify_awaiters()
+    jhelper.reconnect.assert_not_called()
+    shared_updater._condition.notify_all.assert_not_called()
