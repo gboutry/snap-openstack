@@ -19,7 +19,6 @@ from pathlib import Path
 import click
 from packaging.version import Version
 from pydantic import Field
-from pydantic.dataclasses import dataclass
 from rich.console import Console
 from rich.status import Status
 
@@ -53,8 +52,7 @@ LOG = logging.getLogger(__name__)
 console = Console()
 
 
-@dataclass
-class CaasConfig:
+class CaasConfig(FeatureConfig):
     image_name: str | None = Field(default=None, description="CAAS Image name")
     image_url: str | None = Field(
         default=None, description="CAAS Image URL to upload to glance"
@@ -136,6 +134,10 @@ class CaasFeature(OpenStackControlPlaneFeature):
     tf_plan_location = TerraformPlanLocation.SUNBEAM_TERRAFORM_REPO
     configure_plan = "caas-setup"
 
+    def config_type(self) -> type | None:
+        """Feature configuration model."""
+        return CaasConfig
+
     def default_software_overrides(self) -> SoftwareConfig:
         """Feature software configuration."""
         return SoftwareConfig(
@@ -211,7 +213,7 @@ class CaasFeature(OpenStackControlPlaneFeature):
     @pass_method_obj
     def enable_cmd(self, deployment: Deployment, show_hints: bool) -> None:
         """Enable Container as a Service feature."""
-        self.enable_feature(deployment, FeatureConfig(), show_hints)
+        self.enable_feature(deployment, CaasConfig(), show_hints)
 
     @click.command()
     @click_option_show_hints
