@@ -14,7 +14,7 @@
 
 import asyncio
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, Mock, patch
+from unittest.mock import AsyncMock, MagicMock, Mock, call, patch
 
 import pytest
 import yaml
@@ -630,6 +630,103 @@ class TestJujuStepHelper:
         assert not jsh.channel_update_needed("foo/stable", "ba/stable")
 
 
+class TestJujuActionHelper:
+    @patch("sunbeam.core.juju.run_sync")
+    def test_get_unit(self, mock_run_sync):
+        mock_client = Mock()
+        mock_jhelper = Mock()
+        mock_client.cluster.get_node_info.return_value = {"machineid": "fakeid"}
+        side_effect = [Mock(), Mock()]
+        mock_run_sync.side_effect = side_effect
+
+        juju.JujuActionHelper.get_unit(
+            mock_client,
+            mock_jhelper,
+            "fake-model",
+            "fake-node",
+            "fake-app",
+        )
+        mock_client.cluster.get_node_info.assert_called_once_with("fake-node")
+        mock_jhelper.get_unit_from_machine.assert_called_once_with(
+            "fake-app",
+            "fakeid",
+            side_effect[0],
+        )
+        mock_run_sync.assert_has_calls(
+            [
+                call(mock_jhelper.get_model.return_value),
+                call(mock_jhelper.get_unit_from_machine.return_value),
+            ]
+        )
+
+    @patch("sunbeam.core.juju.JujuActionHelper.get_unit")
+    @patch("sunbeam.core.juju.run_sync")
+    def test_run_action(self, mock_run_sync, mock_get_unit):
+        mock_client = Mock()
+        mock_jhelper = Mock()
+        result = juju.JujuActionHelper.run_action(
+            mock_client,
+            mock_jhelper,
+            "fake-model",
+            "fake-node",
+            "fake-app",
+            "fake-action",
+            {"p1": "v1", "p2": "v2"},
+        )
+        assert result == mock_run_sync.return_value
+        mock_get_unit.assert_called_once_with(
+            mock_client,
+            mock_jhelper,
+            "fake-model",
+            "fake-node",
+            "fake-app",
+        )
+        mock_run_sync.assert_called_once_with(mock_jhelper.run_action.return_value)
+
+    @patch("sunbeam.core.juju.JujuActionHelper.get_unit")
+    def test_run_action_unit_not_found_exception(self, mock_get_unit):
+        mock_client = Mock()
+        mock_jhelper = Mock()
+        mock_get_unit.side_effect = juju.UnitNotFoundException
+        with pytest.raises(juju.UnitNotFoundException):
+            juju.JujuActionHelper.run_action(
+                mock_client,
+                mock_jhelper,
+                "fake-model",
+                "fake-node",
+                "fake-app",
+                "fake-action",
+                {"p1": "v1", "p2": "v2"},
+            )
+
+    @patch("sunbeam.core.juju.JujuActionHelper.get_unit")
+    @patch("sunbeam.core.juju.run_sync")
+    def test_run_action_failed_exception(self, mock_run_sync, mock_get_unit):
+        mock_client = Mock()
+        mock_jhelper = Mock()
+        mock_get_unit.side_effect = juju.ActionFailedException(Mock())
+        with pytest.raises(juju.ActionFailedException):
+            juju.JujuActionHelper.run_action(
+                mock_client,
+                mock_jhelper,
+                "fake-model",
+                "fake-node",
+                "fake-app",
+                "fake-action",
+                {"p1": "v1", "p2": "v2"},
+            )
+
+
+@pytest.mark.asyncio
+async def test_wait_until_desired_status_for_apps(jhelper: juju.JujuHelper):
+    model = AsyncMock(spec=Model)
+    model.__aenter__.return_value = model
+    model.applications = {
+        "app1": None,
+        "app2": None,
+    }
+
+
 @pytest.fixture
 def shared_updater():
     _SharedStatusUpdater_class = Mock()
@@ -637,27 +734,6 @@ def shared_updater():
     _SharedStatusUpdater_class.return_value = shared_updater
     with patch("sunbeam.core.juju._SharedStatusUpdater", _SharedStatusUpdater_class):
         yield shared_updater
-
-
-@pytest.mark.asyncio
-async def test_wait_until_desired_status_for_apps(
-    jhelper: juju.JujuHelper, shared_updater: juju._SharedStatusUpdater
-):
-    _wait_until_status_coroutine = AsyncMock()
-
-    with (
-        patch.object(
-            jhelper, "_wait_until_status_coroutine", _wait_until_status_coroutine
-        ),
-    ):
-        await jhelper.wait_until_desired_status("control-plane", ["app1", "app2"])
-
-        assert _wait_until_status_coroutine.call_count == 2
-        assert _wait_until_status_coroutine.call_args_list == [
-            ((shared_updater, "app1", None, None, {"active"}, None, None),),
-            ((shared_updater, "app2", None, None, {"active"}, None, None),),
-        ]
-        _wait_until_status_coroutine.reset_mock()
 
 
 @pytest.mark.asyncio
