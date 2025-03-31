@@ -29,6 +29,7 @@ from sunbeam.core.openstack import OPENSTACK_MODEL
 from sunbeam.core.terraform import TerraformException
 
 LOG = logging.getLogger(__name__)
+INSTANCE_WAIT_TIMEOUT = 360  # 6 min
 console = Console()
 snap = Snap()
 
@@ -134,7 +135,7 @@ def launch(
                 key_name=keypair.name,
             )
 
-            server = conn.compute.wait_for_server(server)
+            server = conn.compute.wait_for_server(server, wait=INSTANCE_WAIT_TIMEOUT)
         except openstack.exceptions.SDKException as e:
             LOG.error(f"Instance creation request failed: {e}")
             raise click.ClickException(
