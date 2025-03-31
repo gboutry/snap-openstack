@@ -88,6 +88,10 @@ class DeployMachineApplicationStep(BaseStep):
         """Extra terraform vars to pass to terraform apply."""
         return {}
 
+    def tf_apply_extra_args(self) -> list:
+        """Extra args for the terraform apply command."""
+        return []
+
     def get_application_timeout(self) -> int:
         """Application timeout in seconds."""
         return 600
@@ -144,6 +148,7 @@ class DeployMachineApplicationStep(BaseStep):
                 self.manifest,
                 tfvar_config=self.config,
                 override_tfvars=extra_tfvars,
+                tf_apply_extra_args=self.tf_apply_extra_args(),
             )
         except TerraformException as e:
             return Result(ResultType.FAILED, str(e))

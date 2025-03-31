@@ -365,10 +365,9 @@ def click_option_database(func: click.decorators.FC) -> click.decorators.FC:
             case_sensitive=False,
         ),
         help=(
-            "Allows definition of the intended cluster configuration: "
-            "'auto' for automatic determination, "
-            "'single' for a single database, "
-            "'multi' for a database per service, "
+            "This option is deprecated and the value is ignored. "
+            "Instead user is prompted to select the database topology. "
+            "The database topology can also be set via manifest."
         ),
     )(func)
 

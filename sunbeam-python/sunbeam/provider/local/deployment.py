@@ -53,7 +53,12 @@ from sunbeam.steps.clusterd import (
 )
 from sunbeam.steps.k8s import K8S_ADDONS_CONFIG_KEY, k8s_addons_questions
 from sunbeam.steps.microceph import CONFIG_DISKS_KEY, microceph_questions
-from sunbeam.steps.openstack import REGION_CONFIG_KEY, region_questions
+from sunbeam.steps.openstack import (
+    REGION_CONFIG_KEY,
+    TOPOLOGY_KEY,
+    database_topology_questions,
+    region_questions,
+)
 
 LOG = logging.getLogger(__name__)
 LOCAL_TYPE = "local"
@@ -193,10 +198,22 @@ class LocalDeployment(Deployment):
         variables = {}
         try:
             if client is not None:
+                variables = load_answers(client, TOPOLOGY_KEY)
+        except ClusterServiceUnavailableException:
+            pass
+        database_bank = QuestionBank(
+            questions=database_topology_questions(),
+            console=console,
+            previous_answers=variables,
+        )
+        preseed_content.extend(show_questions(database_bank))
+
+        variables = {}
+        try:
+            if client is not None:
                 variables = load_answers(client, REGION_CONFIG_KEY)
         except ClusterServiceUnavailableException:
             pass
-
         region_bank = QuestionBank(
             questions=region_questions(),
             console=console,

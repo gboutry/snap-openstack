@@ -286,7 +286,7 @@ class PromptForProxyStep(BaseStep):
         self.variables.setdefault("proxy", {})
 
         previous_answers = self.variables.get("proxy", {})
-        LOG.debug(f"Previos anders: {previous_answers}")
+        LOG.debug(f"Previous answers: {previous_answers}")
         if not (
             previous_answers.get("http_proxy")
             and previous_answers.get("https_proxy")  # noqa: W503

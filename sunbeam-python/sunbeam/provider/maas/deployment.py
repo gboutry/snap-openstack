@@ -28,7 +28,12 @@ from sunbeam.commands.configure import (
 from sunbeam.commands.proxy import proxy_questions
 from sunbeam.core.deployment import PROXY_CONFIG_KEY, Deployment, Networks
 from sunbeam.core.questions import Question, QuestionBank, load_answers, show_questions
-from sunbeam.steps.openstack import REGION_CONFIG_KEY, region_questions
+from sunbeam.steps.openstack import (
+    REGION_CONFIG_KEY,
+    TOPOLOGY_KEY,
+    database_topology_questions,
+    region_questions,
+)
 
 if TYPE_CHECKING:
     from sunbeam.provider.maas.client import MaasClient
@@ -218,6 +223,19 @@ class MaasDeployment(Deployment):
             previous_answers=variables.get("proxy", {}),
         )
         preseed_content.extend(show_questions(proxy_bank, section="proxy"))
+
+        variables = {}
+        try:
+            if client is not None:
+                variables = load_answers(client, TOPOLOGY_KEY)
+        except ClusterServiceUnavailableException:
+            pass
+        database_bank = QuestionBank(
+            questions=database_topology_questions(),
+            console=console,
+            previous_answers=variables,
+        )
+        preseed_content.extend(show_questions(database_bank))
 
         variables = {}
         try:

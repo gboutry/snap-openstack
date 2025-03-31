@@ -50,7 +50,6 @@ from sunbeam.steps.openstack import (
 )
 
 TOPOLOGY = "single"
-DATABASE = "single"
 MODEL = "test-model"
 
 
@@ -120,7 +119,6 @@ class TestDeployControlPlaneStep(unittest.TestCase):
             self.jhelper,
             self.manifest,
             TOPOLOGY,
-            DATABASE,
             MODEL,
         )
         result = step.run()
@@ -140,7 +138,6 @@ class TestDeployControlPlaneStep(unittest.TestCase):
             self.jhelper,
             self.manifest,
             TOPOLOGY,
-            DATABASE,
             MODEL,
         )
         result = step.run()
@@ -159,7 +156,6 @@ class TestDeployControlPlaneStep(unittest.TestCase):
             self.jhelper,
             self.manifest,
             TOPOLOGY,
-            DATABASE,
             MODEL,
         )
         result = step.run()
@@ -180,7 +176,6 @@ class TestDeployControlPlaneStep(unittest.TestCase):
             self.jhelper,
             self.manifest,
             TOPOLOGY,
-            DATABASE,
             MODEL,
         )
         result = step.run()
@@ -197,7 +192,6 @@ class TestDeployControlPlaneStep(unittest.TestCase):
             self.jhelper,
             self.manifest,
             TOPOLOGY,
-            DATABASE,
             MODEL,
         )
         with patch(
@@ -216,69 +210,7 @@ class TestDeployControlPlaneStep(unittest.TestCase):
             self.jhelper,
             self.manifest,
             TOPOLOGY,
-            DATABASE,
             MODEL,
-        )
-        with patch(
-            "sunbeam.steps.openstack.read_config",
-            Mock(return_value={"topology": "single", "database": "single"}),
-        ):
-            result = step.is_skip()
-
-        assert result.result_type == ResultType.COMPLETED
-
-    def test_is_skip_database_changed(self):
-        self.snap_mock().config.get.return_value = "k8s"
-        step = DeployControlPlaneStep(
-            self.deployment,
-            self.tfhelper,
-            self.jhelper,
-            self.manifest,
-            TOPOLOGY,
-            DATABASE,
-            MODEL,
-        )
-        with patch(
-            "sunbeam.steps.openstack.read_config",
-            Mock(return_value={"topology": "single", "database": "multi"}),
-        ):
-            result = step.is_skip()
-
-        assert result.result_type == ResultType.FAILED
-
-    def test_is_skip_incompatible_topology(self):
-        self.snap_mock().config.get.return_value = "k8s"
-        step = DeployControlPlaneStep(
-            self.deployment,
-            self.tfhelper,
-            self.jhelper,
-            self.manifest,
-            "large",
-            "auto",
-            MODEL,
-            force=False,
-        )
-        with patch(
-            "sunbeam.steps.openstack.read_config",
-            Mock(return_value={"topology": "single", "database": "single"}),
-        ):
-            result = step.is_skip()
-
-        assert result.result_type == ResultType.FAILED
-        assert result.message
-        assert "use -f/--force to override" in result.message
-
-    def test_is_skip_force_incompatible_topology(self):
-        self.snap_mock().config.get.return_value = "k8s"
-        step = DeployControlPlaneStep(
-            self.deployment,
-            self.tfhelper,
-            self.jhelper,
-            self.manifest,
-            "large",
-            "auto",
-            MODEL,
-            force=True,
         )
         with patch(
             "sunbeam.steps.openstack.read_config",

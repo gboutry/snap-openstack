@@ -71,6 +71,7 @@ DATABASE_MEMORY_KEY = "DatabaseMemory"
 DATABASE_STORAGE_KEY = "DatabaseStorage"
 REGION_CONFIG_KEY = "Region"
 DEFAULT_REGION = "RegionOne"
+DEFAULT_DATABASE_TOPOLOGY = "single"
 
 DATABASE_MAX_POOL_SIZE = 2
 DATABASE_ADDITIONAL_BUFFER_SIZE = 600
@@ -378,10 +379,8 @@ class DeployControlPlaneStep(BaseStep, JujuStepHelper):
         jhelper: JujuHelper,
         manifest: Manifest,
         topology: str,
-        database: str,
         machine_model: str,
         proxy_settings: dict | None = None,
-        force: bool = False,
     ):
         super().__init__(
             "Deploying OpenStack Control Plane",
@@ -392,12 +391,11 @@ class DeployControlPlaneStep(BaseStep, JujuStepHelper):
         self.jhelper = jhelper
         self.manifest = manifest
         self.topology = topology
-        self.database = database
         self.machine_model = machine_model
         self.proxy_settings = proxy_settings or {}
-        self.force = force
         self.model = OPENSTACK_MODEL
         self.cloud = K8SHelper.get_cloud(deployment.name)
+        self.database = DEFAULT_DATABASE_TOPOLOGY
 
     def get_storage_tfvars(self, storage_nodes: list[dict]) -> dict:
         """Create terraform variables related to storage."""
@@ -483,6 +481,8 @@ class DeployControlPlaneStep(BaseStep, JujuStepHelper):
         self.update_status(status, "determining appropriate configuration")
         try:
             previous_config = read_config(self.client, TOPOLOGY_KEY)
+            self.database = previous_config.get("database", DEFAULT_DATABASE_TOPOLOGY)
+            LOG.debug(f"database topology {self.database}")
         except ConfigItemNotFoundException:
             # Config was never registered in database
             previous_config = {}
@@ -492,28 +492,6 @@ class DeployControlPlaneStep(BaseStep, JujuStepHelper):
         if self.topology == "auto":
             self.topology = determined_topology
         LOG.debug(f"topology {self.topology}")
-
-        if self.database == "auto":
-            self.database = previous_config.get("database", determined_topology)
-        if self.database == "large":
-            # multi and large are the same
-            self.database = "multi"
-        LOG.debug(f"database topology {self.database}")
-        if (database := previous_config.get("database")) and database != self.database:
-            return Result(
-                ResultType.FAILED,
-                "Database topology cannot be changed, please destroy and re-bootstrap",
-            )
-
-        is_not_compatible = self.database == "single" and self.topology == "large"
-        if not self.force and is_not_compatible:
-            return Result(
-                ResultType.FAILED,
-                (
-                    "Cannot deploy control plane to large with single database,"
-                    " use -f/--force to override"
-                ),
-            )
 
         # Check for database size modifications in manifest
         # TODO: Force flag to update storage sizes once resize database on k8s
@@ -829,6 +807,94 @@ class PromptRegionStep(BaseStep):
         :return:
         """
         return Result(ResultType.COMPLETED, f"Region set to {self.variables['region']}")
+
+
+def validate_database_topologies(database: str):
+    """Checkf if topology is either single or multi."""
+    if database not in ["single", "multi"]:
+        raise ValueError("Database topology should be single or multi.")
+
+
+def database_topology_questions():
+    return {
+        "database": PromptQuestion(
+            "Enter database topology: single/multi (cannot be changed later)",
+            default_value=DEFAULT_DATABASE_TOPOLOGY,
+            validation_function=validate_database_topologies,
+            description=(
+                "This will configure number of databases, single for entire cluster "
+                "or multiple databases with one per openstack service."
+            ),
+        )
+    }
+
+
+class PromptDatabaseTopologyStep(BaseStep):
+    """Prompt user for database topology."""
+
+    def __init__(
+        self,
+        client: Client,
+        manifest: Manifest | None = None,
+        accept_defaults: bool = False,
+    ):
+        super().__init__("Database", "Query user for database topology")
+        self.client = client
+        self.manifest = manifest
+        self.accept_defaults = accept_defaults
+        self.variables: dict = {}
+
+    def prompt(
+        self,
+        console: Console | None = None,
+        show_hint: bool = False,
+    ) -> None:
+        """Determines if the step can take input from the user.
+
+        Prompts are used by Steps to gather the necessary input prior to
+        running the step. Steps should not expect that the prompt will be
+        available and should provide a reasonable default where possible.
+        """
+        self.variables = load_answers(self.client, TOPOLOGY_KEY)
+
+        if database := self.variables.get("database"):
+            # Region cannot be modified once set
+            LOG.debug(f"Database topology already set to {database}")
+            return
+
+        preseed = {}
+        if self.manifest:
+            preseed["database"] = self.manifest.core.config.database
+
+        database_topology_bank = QuestionBank(
+            questions=database_topology_questions(),
+            console=console,
+            preseed=preseed,
+            previous_answers=self.variables,
+            accept_defaults=self.accept_defaults,
+            show_hint=show_hint,
+        )
+        self.variables["database"] = database_topology_bank.database.ask()
+        write_answers(self.client, TOPOLOGY_KEY, self.variables)
+
+    def has_prompts(self) -> bool:
+        """Returns true if the step has prompts that it can ask the user.
+
+        :return: True if the step can ask the user for prompts,
+                 False otherwise
+        """
+        return True
+
+    def run(self, status: Status | None) -> Result:
+        """Run the step to completion.
+
+        Invoked when the step is run and returns a ResultType to indicate
+        :return:
+        """
+        return Result(
+            ResultType.COMPLETED,
+            f"Database topology set to {self.variables['database']}",
+        )
 
 
 class DestroyControlPlaneStep(BaseStep):

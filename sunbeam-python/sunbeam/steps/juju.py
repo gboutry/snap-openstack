@@ -13,6 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import copy
 import itertools
 import json
 import logging
@@ -21,6 +22,7 @@ import re
 import shutil
 import socket
 import subprocess
+import tempfile
 import textwrap
 import time
 import typing
@@ -271,49 +273,71 @@ class BootstrapJujuStep(BaseStep, JujuStepHelper):
         :return:
         """
         try:
-            cmd = [self._get_juju_binary(), "bootstrap"]
-            cmd.extend(self.bootstrap_args)
-            cmd.extend([self.cloud, self.controller])
+            config_args: dict[str, typing.Any] = {}
+            bootstrap_args_without_configs: list[str] = []
+
+            # Write all --config args to a file and pass
+            # --config <configfile> option to bootstrap command
+            # Separate bootstrap config args to config_args and rest of the
+            # bootstrap args to bootstrap_args_without_configs
+            index = 0
+            while index < len(self.bootstrap_args):
+                arg = self.bootstrap_args[index]
+                if arg == "--config":
+                    index += 1
+
+                    try:
+                        k, v = self.bootstrap_args[index].split("=", 1)
+                    except ValueError as e:
+                        LOG.exception("Error bootstrapping Juju")
+                        LOG.debug(str(e))
+                        msg = (
+                            "Value Error: Expected boostrap argument in form of "
+                            f"key=value, got {self.bootstrap_args[index]}"
+                        )
+                        return Result(ResultType.FAILED, msg)
+
+                    config_args[k] = v
+                else:
+                    bootstrap_args_without_configs.append(arg)
+
+                index += 1
+
             if "HTTP_PROXY" in self.proxy_settings:
-                cmd.extend(
-                    [
-                        "--config",
-                        f"juju-http-proxy={self.proxy_settings.get('HTTP_PROXY')}",
-                        "--config",
-                        f"snap-http-proxy={self.proxy_settings.get('HTTP_PROXY')}",
-                    ]
-                )
+                config_args["juju-http-proxy"] = self.proxy_settings.get("HTTP_PROXY")
+                config_args["snap-http-proxy"] = self.proxy_settings.get("HTTP_PROXY")
             if "HTTPS_PROXY" in self.proxy_settings:
-                cmd.extend(
-                    [
-                        "--config",
-                        f"juju-https-proxy={self.proxy_settings.get('HTTPS_PROXY')}",
-                        "--config",
-                        f"snap-https-proxy={self.proxy_settings.get('HTTPS_PROXY')}",
-                    ]
-                )
+                config_args["juju-https-proxy"] = self.proxy_settings.get("HTTPS_PROXY")
+                config_args["snap-https-proxy"] = self.proxy_settings.get("HTTPS_PROXY")
             if "NO_PROXY" in self.proxy_settings:
-                cmd.extend(
-                    ["--config", f"juju-no-proxy={self.proxy_settings.get('NO_PROXY')}"]
+                config_args["juju-no-proxy"] = self.proxy_settings.get("NO_PROXY")
+
+            configs_to_print = copy.deepcopy(config_args)
+            if "admin-secret" in configs_to_print:
+                configs_to_print["admin-secret"] = "********"
+
+            # Write config args into a temporary file
+            with tempfile.NamedTemporaryFile(delete=False) as config_file:
+                config_file.write(yaml.dump(config_args).encode("utf-8"))
+                config_file.flush()
+
+                cmd = [self._get_juju_binary(), "bootstrap"]
+                cmd.extend(bootstrap_args_without_configs)
+                cmd.extend([self.cloud, self.controller])
+                cmd.extend(["--config", config_file.name])
+
+                env = os.environ.copy()
+                env.update(self.proxy_settings)
+
+                LOG.debug(f"Running command {' '.join(cmd)}")
+                LOG.debug(f"Bootstrap configs used: {configs_to_print}")
+                process = subprocess.run(
+                    cmd, capture_output=True, text=True, check=True, env=env
                 )
-
-            hidden_cmd = []
-            for arg in cmd:
-                if "admin-secret" in arg:
-                    option, _ = arg.split("=")
-                    arg = "=".join((option, "********"))
-                hidden_cmd.append(arg)
-
-            LOG.debug(f"Running command {' '.join(hidden_cmd)}")
-            env = os.environ.copy()
-            env.update(self.proxy_settings)
-
-            process = subprocess.run(
-                cmd, capture_output=True, text=True, check=True, env=env
-            )
-            LOG.debug(
-                f"Command finished. stdout={process.stdout}, stderr={process.stderr}"
-            )
+                LOG.debug(
+                    f"Command finished. stdout={process.stdout}, "
+                    f"stderr={process.stderr}"
+                )
 
             return Result(ResultType.COMPLETED)
         except subprocess.CalledProcessError as e:

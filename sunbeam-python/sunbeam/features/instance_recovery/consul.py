@@ -374,7 +374,7 @@ class ConsulFeature:
             tfvars["enable-consul-management"] = True
             _management_config = {
                 "expose-gossip-and-rpc-ports": True,
-                "serflan-node-port": CONSUL_TENANT_SERF_LAN_PORT,
+                "serflan-node-port": CONSUL_MANAGEMENT_SERF_LAN_PORT,
             }
             # Manifest takes precedence
             _management_config.update(
@@ -406,7 +406,7 @@ class ConsulFeature:
             tfvars["enable-consul-storage"] = True
             _storage_config = {
                 "expose-gossip-and-rpc-ports": True,
-                "serflan-node-port": CONSUL_TENANT_SERF_LAN_PORT,
+                "serflan-node-port": CONSUL_STORAGE_SERF_LAN_PORT,
             }
             # Manifest takes precedence
             _storage_config.update(

@@ -15,6 +15,7 @@
 import logging
 
 import click
+from click.core import ParameterSource
 from rich.console import Console
 
 from sunbeam.clusterd.client import Client
@@ -22,6 +23,7 @@ from sunbeam.core.common import click_option_topology, run_plan
 from sunbeam.core.deployment import Deployment
 from sunbeam.core.juju import JujuHelper
 from sunbeam.core.terraform import TerraformInitStep
+from sunbeam.steps.cinder_volume import DeployCinderVolumeApplicationStep
 from sunbeam.steps.microceph import (
     DeployMicrocephApplicationStep,
     SetCephMgrPoolSizeStep,
@@ -36,7 +38,13 @@ console = Console()
 @click.command()
 @click_option_topology
 @click.option(
-    "-f", "--force", help="Force resizing to incompatible topology.", is_flag=True
+    "-f",
+    "--force",
+    help=(
+        "Force resizing to incompatible topology. "
+        "This option is deprecated and the value is ignored."
+    ),
+    is_flag=True,
 )
 @click_option_show_hints
 @click.pass_context
@@ -50,9 +58,14 @@ def resize(
 
     openstack_tfhelper = deployment.get_tfhelper("openstack-plan")
     microceph_tfhelper = deployment.get_tfhelper("microceph-plan")
+    cinder_volume_tfhelper = deployment.get_tfhelper("cinder-volume-plan")
     jhelper = JujuHelper(deployment.get_connected_controller())
 
     storage_nodes = client.cluster.list_nodes_by_role("storage")
+
+    parameter_source = click.get_current_context().get_parameter_source("force")
+    if parameter_source == ParameterSource.COMMANDLINE:
+        LOG.warning("WARNING: Option --force is deprecated and the value is ignored.")
 
     plan = []
     if len(storage_nodes):
@@ -86,12 +99,28 @@ def resize(
                 jhelper,
                 manifest,
                 topology,
-                "auto",
                 deployment.openstack_machines_model,
-                force=force,
             ),
         ]
     )
+
+    if len(storage_nodes):
+        # DeployCinderVolumeApplicationStep depends on openstack-tfhelper
+        # to get outputs, so let OpenStack deployment complete first
+        plan.extend(
+            [
+                TerraformInitStep(cinder_volume_tfhelper),
+                DeployCinderVolumeApplicationStep(
+                    deployment,
+                    client,
+                    cinder_volume_tfhelper,
+                    jhelper,
+                    manifest,
+                    deployment.openstack_machines_model,
+                    refresh=True,
+                ),
+            ]
+        )
 
     run_plan(plan, console, show_hints)
 

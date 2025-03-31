@@ -19,6 +19,7 @@ from typing import Tuple, Type
 
 import click
 import yaml
+from click.core import ParameterSource
 from rich.console import Console
 from snaphelpers import Snap
 
@@ -112,6 +113,7 @@ from sunbeam.steps.clusterd import (
 from sunbeam.steps.hypervisor import (
     AddHypervisorUnitsStep,
     DeployHypervisorApplicationStep,
+    ReapplyHypervisorOptionalIntegrationsStep,
     ReapplyHypervisorTerraformPlanStep,
     RemoveHypervisorUnitStep,
 )
@@ -163,6 +165,7 @@ from sunbeam.steps.microceph import (
 from sunbeam.steps.openstack import (
     DeployControlPlaneStep,
     OpenStackPatchLoadBalancerServicesIPStep,
+    PromptDatabaseTopologyStep,
     PromptRegionStep,
 )
 from sunbeam.steps.sunbeam_machine import (
@@ -585,6 +588,14 @@ def bootstrap(
     deployments = DeploymentsConfig.load(path)
     manifest = deployment.get_manifest(manifest_path)
 
+    parameter_source = click.get_current_context().get_parameter_source("database")
+    if parameter_source == ParameterSource.COMMANDLINE:
+        LOG.warning(
+            "WARNING: Option --database is deprecated and the value is ignored. "
+            "Instead user is prompted to select the database topology. "
+            "The database topology can also be set via manifest."
+        )
+
     LOG.debug(f"Manifest used for deployment - core: {manifest.core}")
     LOG.debug(f"Manifest used for deployment - features: {manifest.features}")
 
@@ -668,6 +679,7 @@ def bootstrap(
             deployment, accept_defaults=accept_defaults, manifest=manifest
         )
     )
+    plan.append(PromptDatabaseTopologyStep(client, manifest, accept_defaults))
     plan.append(PromptRegionStep(client, manifest, accept_defaults))
     run_plan(plan, console, show_hints)
 
@@ -784,7 +796,6 @@ def bootstrap(
                 jhelper,
                 manifest,
                 topology,
-                database,
                 deployment.openstack_machines_model,
                 proxy_settings=proxy_settings,
             )
@@ -1120,7 +1131,6 @@ def join(
                     jhelper,
                     manifest,
                     "auto",
-                    "auto",
                     deployment.openstack_machines_model,
                 )
             )
@@ -1156,7 +1166,7 @@ def join(
         hypervisor_tfhelper = deployment.get_tfhelper("hypervisor-plan")
         plan4.append(TerraformInitStep(hypervisor_tfhelper))
         plan4.append(
-            DeployHypervisorApplicationStep(
+            ReapplyHypervisorOptionalIntegrationsStep(
                 deployment,
                 client,
                 hypervisor_tfhelper,
