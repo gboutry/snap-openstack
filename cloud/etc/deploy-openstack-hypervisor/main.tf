@@ -36,13 +36,13 @@ resource "juju_application" "openstack-hypervisor" {
     name     = "openstack-hypervisor"
     channel  = var.charm_channel
     revision = var.charm_revision
-    base    = "ubuntu@24.04"
+    base     = "ubuntu@24.04"
   }
 
   config = merge({
-    snap-channel = var.snap_channel
+    snap-channel          = var.snap_channel
     use-migration-binding = true
-    use-data-binding = true
+    use-data-binding      = true
   }, var.charm_config)
   endpoint_bindings = var.endpoint_bindings
 }
@@ -138,7 +138,7 @@ resource "juju_integration" "hypervisor-cinder-ceph" {
   }
 
   application {
-    name = var.cinder-volume-ceph-application-name
+    name     = var.cinder-volume-ceph-application-name
     endpoint = "ceph-access"
   }
 }
