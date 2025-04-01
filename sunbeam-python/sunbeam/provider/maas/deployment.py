@@ -27,6 +27,7 @@ from sunbeam.commands.configure import (
 )
 from sunbeam.commands.proxy import proxy_questions
 from sunbeam.core.deployment import PROXY_CONFIG_KEY, Deployment, Networks
+from sunbeam.core.k8s import K8SHelper
 from sunbeam.core.questions import Question, QuestionBank, load_answers, show_questions
 from sunbeam.steps.openstack import (
     REGION_CONFIG_KEY,
@@ -305,6 +306,16 @@ class MaasDeployment(Deployment):
         if space is None:
             raise ValueError(f"Space for network {network.value} not set.")
         return space
+
+    @property
+    def internal_ip_pool(self) -> str:
+        """Name of the internal IP pool."""
+        return K8SHelper().get_internal_pool_name()
+
+    @property
+    def public_ip_pool(self) -> str:
+        """Name of the public IP pool."""
+        return self.public_api_label
 
 
 def is_maas_deployment(deployment: Deployment) -> TypeGuard[MaasDeployment]:

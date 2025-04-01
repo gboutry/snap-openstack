@@ -44,6 +44,7 @@ from sunbeam.core.juju import (
     JujuAccountNotFound,
     JujuController,
 )
+from sunbeam.core.k8s import K8SHelper
 from sunbeam.core.questions import QuestionBank, load_answers, show_questions
 from sunbeam.provider.local.steps import local_hypervisor_questions
 from sunbeam.steps.clusterd import (
@@ -324,3 +325,8 @@ class LocalDeployment(Deployment):
         Local deployment only supports management space as of now.
         """
         return "management"
+
+    @property
+    def internal_ip_pool(self) -> str:
+        """Name of the internal IP pool."""
+        return K8SHelper().get_internal_pool_name()

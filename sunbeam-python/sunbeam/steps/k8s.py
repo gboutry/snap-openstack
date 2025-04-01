@@ -19,11 +19,11 @@ import subprocess
 
 import tenacity
 import yaml
-from lightkube import ConfigError, KubeConfig
+from lightkube import ApiError, ConfigError, KubeConfig
 from lightkube.core.client import Client as KubeClient
+from lightkube.models.meta_v1 import ObjectMeta
 from rich.console import Console
 
-from sunbeam import utils
 from sunbeam.clusterd.client import Client
 from sunbeam.clusterd.service import (
     ConfigItemNotFoundException,
@@ -35,6 +35,7 @@ from sunbeam.core.common import (
     ResultType,
     Role,
     Status,
+    SunbeamException,
     read_config,
     update_config,
     validate_cidr_or_ip_ranges,
@@ -47,6 +48,7 @@ from sunbeam.core.juju import (
     JujuHelper,
     JujuStepHelper,
     LeaderNotFoundException,
+    MachineNotFoundException,
     ModelNotFoundException,
     UnsupportedKubeconfigException,
     run_sync,
@@ -80,7 +82,6 @@ from sunbeam.core.steps import (
     RemoveMachineUnitsStep,
 )
 from sunbeam.core.terraform import TerraformHelper
-from sunbeam.steps.juju import BOOTSTRAP_CONFIG_KEY
 
 LOG = logging.getLogger(__name__)
 K8S_CONFIG_KEY = "TerraformVarsK8S"
@@ -197,29 +198,11 @@ class DeployK8SApplicationStep(DeployMachineApplicationStep):
         variables = load_answers(self.client, self._ADDONS_CONFIG)
         return variables.get("k8s-addons", {}).get("loadbalancer")
 
-    def _get_loadbalancer_l2_interfaces(self) -> str | None:
-        """Return l2 interfaces to use for loadbalancer.
-
-        For local mode, the interfaces is based on management cidr on bootstrap
-        machine.
-        """
-        bootstrap_variables = load_answers(self.client, BOOTSTRAP_CONFIG_KEY)
-        management_cidr = bootstrap_variables.get("bootstrap", {}).get(
-            "management_cidr"
-        )
-
-        if management_cidr is None:
-            return None
-
-        return utils.get_local_ifname_by_cidr(management_cidr)
-
     def _get_k8s_config_tfvars(self) -> dict:
-        config_tfvars: dict[str, bool | str] = {
+        config_tfvars: dict[str, bool | str | None] = {
             "load-balancer-enabled": True,
             "load-balancer-l2-mode": True,
         }
-        if l2_interfaces := self._get_loadbalancer_l2_interfaces():
-            config_tfvars["load-balancer-l2-interfaces"] = l2_interfaces
 
         charm_manifest = self.manifest.core.software.charms.get("k8s")
         if charm_manifest and charm_manifest.config:
@@ -494,6 +477,7 @@ class StoreK8SKubeConfigStep(BaseStep, JujuStepHelper):
             )
             LOG.debug(unit)
             leader_unit_management_ip = self._get_management_server_ip(machine)
+            LOG.debug("Leader unit management IP: %s", leader_unit_management_ip)
             run_action_kwargs = (
                 {"action_params": {"server": leader_unit_management_ip}}
                 if leader_unit_management_ip
@@ -517,6 +501,7 @@ class StoreK8SKubeConfigStep(BaseStep, JujuStepHelper):
             kubeconfig = yaml.safe_load(result["kubeconfig"])
             update_config(self.client, self._KUBECONFIG, kubeconfig)
         except (
+            MachineNotFoundException,
             ApplicationNotFoundException,
             LeaderNotFoundException,
             ActionFailedException,
@@ -528,21 +513,14 @@ class StoreK8SKubeConfigStep(BaseStep, JujuStepHelper):
 
     def _get_management_server_ip(self, machine_id: str) -> str | None:
         """API server endpoint for the Kubernetes cluster."""
-        model = run_sync(self.jhelper.get_model(self.model))
-        machines = run_sync(self.jhelper.get_machines(model))
-        machine_data = machines[machine_id].addresses
-        space_name = self.deployment.get_space(Networks.MANAGEMENT)
-        management_ip = next(
-            (
-                entry["value"]  # type: ignore
-                for entry in machine_data
-                if entry.get("space-name") == space_name  # type: ignore
-            ),
-            None,
+        machine_interfaces = run_sync(
+            self.jhelper.get_machine_interfaces(self.model, machine_id)
         )
-        run_sync(model.disconnect())
-
-        return f"{management_ip}:6443" if management_ip else None
+        LOG.debug("Machine %r interfaces: %r", machine_id, machine_interfaces)
+        for ifname, iface in machine_interfaces.items():
+            if iface.get("space") == self.deployment.get_space(Networks.MANAGEMENT):
+                return iface["ip-addresses"][0] + ":6443"
+        return None
 
 
 class _CommonK8SStepMixin:
@@ -943,3 +921,241 @@ class DestroyK8SApplicationStep(DestroyMachineApplicationStep):
     def get_application_timeout(self) -> int:
         """Return application timeout in seconds."""
         return K8S_DESTROY_TIMEOUT
+
+
+class EnsureL2AdvertisementByHostStep(BaseStep):
+    """Ensure IP Pool is advertised by L2Advertisement resources."""
+
+    _APPLICATION = APPLICATION
+
+    class _L2AdvertisementError(SunbeamException):
+        pass
+
+    def __init__(
+        self,
+        deployment: Deployment,
+        client: Client,
+        jhelper: JujuHelper,
+        model: str,
+        network: Networks,
+        pool: str,
+    ):
+        super().__init__("Ensure L2 advertisement", "Ensuring L2 advertisement")
+        self.deployment = deployment
+        self.client = client
+        self.jhelper = jhelper
+        self.model = model
+        self.network = network
+        self.pool = pool
+        self.l2_advertisement_resource = (
+            K8SHelper.get_lightkube_l2_advertisement_resource()
+        )
+        self.l2_advertisement_namespace = K8SHelper.get_loadbalancer_namespace()
+        self.to_update: list[dict] = []
+        self.to_delete: list[dict] = []
+        self._ifnames: dict[str, str] = {}
+
+    def _labels(self, name: str, space: str) -> dict[str, str]:
+        """Return labels for the L2 advertisement."""
+        return {
+            "app.kubernetes.io/managed-by": self.deployment.name,
+            "app.kubernetes.io/instance": self._instance_label(
+                self.network.value.lower(), name
+            ),
+            "app.kubernetes.io/name": self._name_label(self.network.value.lower()),
+            "sunbeam/hostname": name,
+            "sunbeam/space": space,
+            "sunbeam/network": self.network.value.lower(),
+        }
+
+    def _l2_advertisement_name(self, node: str) -> str:
+        """Return L2 advertisement name for the node."""
+        return f"{self.network.value.lower()}-{node}"
+
+    def _name_label(self, network: str):
+        """Return name label for the L2 advertisement."""
+        return f"{network}-l2"
+
+    def _instance_label(self, network: str, name: str):
+        """Return instance label for the L2 advertisement."""
+        return self._name_label(network) + "-" + name
+
+    def _get_outdated_l2_advertisement(
+        self, nodes: list[dict], kube: KubeClient
+    ) -> tuple[list[str], list[str]]:
+        """Get outdated L2 advertisement."""
+        outdated: list[str] = [node["name"] for node in nodes]
+        deleted: list[str] = []
+
+        l2_advertisements = kube.list(
+            self.l2_advertisement_resource,
+            namespace=self.l2_advertisement_namespace,
+            labels={"app.kubernetes.io/name": self._name_label(self.pool)},
+        )
+
+        for l2_ad in l2_advertisements:
+            if l2_ad.metadata is None or l2_ad.metadata.labels is None:
+                LOG.debug("L2 advertisement has no metadata nor labels")
+                continue
+            hostname = l2_ad.metadata.labels.get("sunbeam/hostname")
+
+            if hostname is None:
+                LOG.debug(
+                    "L2 advertisement %s has no hostname label",
+                    l2_ad.metadata.name,
+                )
+                continue
+            if l2_ad.spec is None:
+                LOG.debug("L2 advertisement %r has no spec", hostname)
+                continue
+            if hostname not in outdated:
+                LOG.debug(
+                    "L2 advertisement %s has no matching node",
+                    l2_ad.metadata.name,
+                )
+                deleted.append(hostname)
+                continue
+            if self.pool not in l2_ad.spec.get("ipAddressPools", []):
+                LOG.debug(
+                    "L2 advertisement %s has wrong allocated ip pool",
+                    l2_ad.metadata.name,
+                )
+                continue
+            interface = None
+            for node in nodes:
+                if node["name"] == hostname:
+                    interface = self._get_interface(node, self.network)
+            if not interface:
+                LOG.debug(
+                    "L2 advertisement %s has no allocated interface",
+                    l2_ad.metadata.name,
+                )
+                continue
+            if l2_ad.spec.get("interfaces") != [interface]:
+                LOG.debug(
+                    "L2 advertisement %s has wrong allocated interface",
+                    l2_ad.metadata.name,
+                )
+                continue
+            outdated.remove(hostname)
+        return outdated, deleted
+
+    def _get_interface(
+        self,
+        node: dict,
+        network: Networks,
+    ) -> str:
+        """Get interface for the node depending on the pool."""
+        name = node["name"]
+        if name in self._ifnames:
+            return self._ifnames[name]
+        machine_id = str(node["machineid"])
+        machine_interfaces = run_sync(
+            self.jhelper.get_machine_interfaces(self.model, machine_id)
+        )
+        LOG.debug("Machine %r interfaces: %r", machine_id, machine_interfaces)
+        for ifname, iface in machine_interfaces.items():
+            if iface.get("space") == self.deployment.get_space(network):
+                self._ifnames[name] = ifname
+                return ifname
+        raise self._L2AdvertisementError(
+            f"Node {node['name']} has no interface in {network.name} space"
+        )
+
+    def is_skip(self, status: Status | None = None) -> Result:
+        """Determines if the step should be skipped or not.
+
+        :return: ResultType.SKIPPED if the Step should be skipped,
+                 ResultType.COMPLETED or ResultType.FAILED otherwise
+        """
+        self.control_nodes = self.client.cluster.list_nodes_by_role(
+            Role.CONTROL.name.lower()
+        )
+
+        try:
+            kubeconfig = read_config(self.client, K8SHelper.get_kubeconfig_key())
+        except ConfigItemNotFoundException:
+            LOG.debug("K8S kubeconfig not found", exc_info=True)
+            return Result(ResultType.FAILED, "K8S kubeconfig not found")
+
+        self.kubeconfig = KubeConfig.from_dict(kubeconfig)
+        try:
+            self.kube = KubeClient(
+                self.kubeconfig, self.l2_advertisement_namespace, trust_env=False
+            )
+        except ConfigError as e:
+            LOG.debug("Error creating k8s client", exc_info=True)
+            return Result(ResultType.FAILED, str(e))
+
+        try:
+            outdated, deleted = self._get_outdated_l2_advertisement(
+                self.control_nodes, self.kube
+            )
+        except (ApiError, self._L2AdvertisementError) as e:
+            LOG.debug("Failed to get outdated L2 advertisement", exc_info=True)
+            return Result(ResultType.FAILED, str(e))
+
+        if not (outdated or deleted):
+            LOG.debug("No L2 advertisement to update")
+            return Result(ResultType.SKIPPED)
+
+        for node in self.control_nodes:
+            if node["name"] in outdated:
+                self.to_update.append(node)
+            if node["name"] in deleted:
+                self.to_delete.append(node)
+
+        return Result(ResultType.COMPLETED)
+
+    def run(self, status: Status | None) -> Result:
+        """Run the step to completion.
+
+        Invoked when the step is run and returns a ResultType to indicate
+
+        :return:
+        """
+        for node in self.to_update:
+            name = node["name"]
+            interface = self._get_interface(node, self.network)
+            try:
+                self.kube.apply(
+                    self.l2_advertisement_resource(
+                        metadata=ObjectMeta(
+                            name=self._l2_advertisement_name(name),
+                            labels=self._labels(
+                                name, self.deployment.get_space(self.network)
+                            ),
+                        ),
+                        spec={
+                            "ipAddressPools": [self.pool],
+                            "interfaces": [interface],
+                            "nodeSelectors": [
+                                {
+                                    "matchLabels": {
+                                        "kubernetes.io/hostname": name,
+                                    }
+                                }
+                            ],
+                        },
+                    ),
+                    field_manager=self.deployment.name,
+                    force=True,
+                )
+            except ApiError:
+                LOG.debug("Failed to update L2 advertisement", exc_info=True)
+                return Result(
+                    ResultType.FAILED, f"Failed to update L2 advertisement for {name}"
+                )
+
+        for node in self.to_delete:
+            try:
+                self.kube.delete(
+                    self.l2_advertisement_resource,
+                    self._l2_advertisement_name(node["name"]),
+                    namespace=self.l2_advertisement_namespace,
+                )
+            except ApiError:
+                LOG.debug("Failed to delete L2 advertisement", exc_info=True)
+                continue
+
+        return Result(ResultType.COMPLETED)

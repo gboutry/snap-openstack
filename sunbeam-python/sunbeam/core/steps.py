@@ -823,28 +823,19 @@ class CreateLoadBalancerIPPoolsStep(BaseStep, abc.ABC):
             self.kube.create(new_ippool)
 
     def handle_l2_advertisement(self, name: str):
-        """Manage L2Advertisement resource."""
-        l2advertisement = None
+        """Manage L2Advertisement resource.
+
+        Kept for backward compatibility, deleting the resource on
+        upgraded versions of Sunbeam.
+        """
         try:
-            l2advertisement = self.kube.get(
+            self.kube.get(
                 self.l2_advertisement_resource, name=name, namespace=self.model
             )
+            self.kube.delete(self.l2_advertisement_resource, name, namespace=self.model)
         except ApiError as e:
             if e.status.code != 404:
-                raise e
-
-        if l2advertisement:
-            if name not in l2advertisement.spec["ipAddressPools"]:
-                LOG.debug(f"Update L2 advertisement {name} with pool {name}")
-                l2advertisement.spec["ipAddressPools"] = name
-                self.kube.replace(l2advertisement)
-        else:
-            LOG.debug(f"Create new L2 Advertisement {name} with pool {name}")
-            new_l2advertisement = self.l2_advertisement_resource(
-                metadata=ObjectMeta(name=name),
-                spec={"ipAddressPools": [name]},
-            )
-            self.kube.create(new_l2advertisement)
+                raise
 
     def run(self, status: Status | None = None) -> Result:
         """Create Loadbalancer IPPool."""

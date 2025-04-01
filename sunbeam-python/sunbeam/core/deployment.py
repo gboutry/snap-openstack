@@ -403,3 +403,13 @@ class Deployment(pydantic.BaseModel):
     def get_space(self, network: Networks) -> str:
         """Get space associated to network."""
         return NotImplemented
+
+    @property
+    def internal_ip_pool(self):
+        """Name of the internal IP pool."""
+        raise NotImplementedError
+
+    @property
+    def public_ip_pool(self):
+        """Name of the public IP pool."""
+        raise NotImplementedError
