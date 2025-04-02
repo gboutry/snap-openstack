@@ -478,9 +478,13 @@ class DestroyMachineApplicationStep(BaseStep):
         except TerraformException:
             LOG.debug("Failed to pull state", exc_info=True)
 
-        model = run_sync(self.jhelper.get_model(self.model))
-        _has_juju_resources = len(run_sync(self._list_applications(model))) > 0
-        run_sync(model.disconnect())
+        try:
+            model = run_sync(self.jhelper.get_model(self.model))
+            _has_juju_resources = len(run_sync(self._list_applications(model))) > 0
+            run_sync(model.disconnect())
+        except ModelNotFoundException:
+            LOG.debug("Model not found", exc_info=True)
+            _has_juju_resources = False
 
         if not self._has_tf_resources and not _has_juju_resources:
             return Result(ResultType.SKIPPED)
