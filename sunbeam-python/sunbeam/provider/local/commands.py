@@ -150,6 +150,7 @@ from sunbeam.steps.k8s import (
     CordonK8SUnitStep,
     DeployK8SApplicationStep,
     DrainK8SUnitStep,
+    EnsureL2AdvertisementByHostStep,
     MigrateK8SKubeconfigStep,
     RemoveK8SUnitsStep,
     StoreK8SKubeConfigStep,
@@ -282,6 +283,14 @@ def get_k8s_plans(
             AddK8SUnitsStep(client, fqdn, jhelper, deployment.openstack_machines_model),
             StoreK8SKubeConfigStep(
                 deployment, client, jhelper, deployment.openstack_machines_model
+            ),
+            EnsureL2AdvertisementByHostStep(
+                deployment,
+                client,
+                jhelper,
+                deployment.openstack_machines_model,
+                Networks.MANAGEMENT,
+                deployment.internal_ip_pool,
             ),
         ]
     )
@@ -1090,6 +1099,16 @@ def join(
             AddK8SUnitsStep(client, name, jhelper, deployment.openstack_machines_model)
         )
         plan4.append(AddK8SCredentialStep(deployment, jhelper))
+        plan4.append(
+            EnsureL2AdvertisementByHostStep(
+                deployment,
+                client,
+                jhelper,
+                deployment.openstack_machines_model,
+                Networks.MANAGEMENT,
+                deployment.internal_ip_pool,
+            ),
+        )
 
     openstack_tfhelper = deployment.get_tfhelper("openstack-plan")
     plan4.append(TerraformInitStep(openstack_tfhelper))
@@ -1301,6 +1320,14 @@ def remove(ctx: click.Context, name: str, force: bool, show_hints: bool) -> None
         CordonK8SUnitStep(client, name, jhelper, deployment.openstack_machines_model),
         DrainK8SUnitStep(client, name, jhelper, deployment.openstack_machines_model),
         RemoveK8SUnitsStep(client, name, jhelper, deployment.openstack_machines_model),
+        EnsureL2AdvertisementByHostStep(
+            deployment,
+            client,
+            jhelper,
+            deployment.openstack_machines_model,
+            Networks.MANAGEMENT,
+            deployment.internal_ip_pool,
+        ),
         RemoveSunbeamMachineUnitsStep(
             client, name, jhelper, deployment.openstack_machines_model
         ),

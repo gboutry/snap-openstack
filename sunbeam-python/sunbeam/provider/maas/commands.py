@@ -164,6 +164,7 @@ from sunbeam.steps.k8s import (
     CordonK8SUnitStep,
     DestroyK8SApplicationStep,
     DrainK8SUnitStep,
+    EnsureL2AdvertisementByHostStep,
     MigrateK8SKubeconfigStep,
     RemoveK8SUnitsStep,
     StoreK8SKubeConfigStep,
@@ -672,6 +673,27 @@ def deploy(
             deployment, client, jhelper, deployment.openstack_machines_model
         )
     )
+    plan2.append(MaasCreateLoadBalancerIPPoolsStep(deployment, client, maas_client))
+    plan2.append(
+        EnsureL2AdvertisementByHostStep(
+            deployment,
+            client,
+            jhelper,
+            deployment.openstack_machines_model,
+            Networks.INTERNAL,
+            deployment.internal_ip_pool,
+        ),
+    )
+    plan2.append(
+        EnsureL2AdvertisementByHostStep(
+            deployment,
+            client,
+            jhelper,
+            deployment.openstack_machines_model,
+            Networks.PUBLIC,
+            deployment.public_ip_pool,
+        )
+    )
     plan2.append(AddK8SCloudStep(deployment, jhelper))
 
     plan2.append(TerraformInitStep(tfhelper_microceph))
@@ -731,7 +753,6 @@ def deploy(
             proxy_settings=proxy_settings,
         )
     )
-    plan2.append(MaasCreateLoadBalancerIPPoolsStep(deployment, client, maas_client))
     plan2.append(
         OpenStackPatchLoadBalancerServicesIPPoolStep(
             client, deployment.public_api_label
@@ -1455,6 +1476,22 @@ def remove_node(ctx: click.Context, name: str, force: bool, show_hints: bool) ->
         CordonK8SUnitStep(client, name, jhelper, deployment.openstack_machines_model),
         DrainK8SUnitStep(client, name, jhelper, deployment.openstack_machines_model),
         RemoveK8SUnitsStep(client, name, jhelper, deployment.openstack_machines_model),
+        EnsureL2AdvertisementByHostStep(
+            deployment,
+            client,
+            jhelper,
+            deployment.openstack_machines_model,
+            Networks.INTERNAL,
+            deployment.internal_ip_pool,
+        ),
+        EnsureL2AdvertisementByHostStep(
+            deployment,
+            client,
+            jhelper,
+            deployment.openstack_machines_model,
+            Networks.PUBLIC,
+            deployment.public_ip_pool,
+        ),
         RemoveSunbeamMachineUnitsStep(
             client, name, jhelper, deployment.openstack_machines_model
         ),

@@ -17,6 +17,7 @@ from ssl import SSLError
 from unittest.mock import AsyncMock, MagicMock, Mock
 
 import pytest
+from lightkube import ApiError
 from maas.client.bones import CallError
 
 import sunbeam.provider.maas.steps as maas_steps
@@ -1495,13 +1496,10 @@ class TestMaasCreateLoadBalancerIPPoolsStep:
         result = step.run()
         assert result.result_type == ResultType.COMPLETED
         get_ip_ranges_from_space_mock.assert_any_call(maas_client, "public_space")
-        assert step.kube.create.call_count == 2
+        assert step.kube.create.call_count == 1
         assert step.kube.create.mock_calls[0][1][0].get("spec", {}).get(
             "addresses"
         ) == ["10.149.100.200-10.149.100.210"]
-        assert step.kube.create.mock_calls[1][1][0].get("spec", {}).get(
-            "ipAddressPools"
-        ) == [pool_name]
 
     def test_run_with_missing_l2advertisement(
         self, deployment_k8s, mocker, read_config
@@ -1517,6 +1515,8 @@ class TestMaasCreateLoadBalancerIPPoolsStep:
         maas_client = Mock()
         k8s_snap = Mock()
         mocker.patch("sunbeam.core.k8s.Snap", k8s_snap)
+        api_error = ApiError.__new__(ApiError)
+        api_error.status = Mock(code=404)
         mocker.patch(
             "sunbeam.core.steps.KubeClient",
             new=Mock(
@@ -1524,7 +1524,7 @@ class TestMaasCreateLoadBalancerIPPoolsStep:
                     get=Mock(
                         side_effect=[
                             FakeIPPool(["10.149.100.200-10.149.100.210"]),
-                            None,
+                            api_error,
                         ]
                     )
                 )
@@ -1541,10 +1541,8 @@ class TestMaasCreateLoadBalancerIPPoolsStep:
         result = step.run()
         assert result.result_type == ResultType.COMPLETED
         get_ip_ranges_from_space_mock.assert_any_call(maas_client, "public_space")
-        assert step.kube.create.call_count == 1
-        assert step.kube.create.mock_calls[0][1][0].get("spec", {}).get(
-            "ipAddressPools"
-        ) == [pool_name]
+        assert step.kube.get.call_count == 2
+        assert step.kube.delete.call_count == 0
 
     def test_run_with_different_ippool(self, deployment_k8s, mocker, read_config):
         pool_name = deployment_k8s.public_api_label

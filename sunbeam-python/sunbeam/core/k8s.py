@@ -39,6 +39,7 @@ SERVICE_LB_ANNOTATION = "io.cilium/lb-ipam-ips"
 METALLB_IP_ANNOTATION = "metallb.universe.tf/loadBalancerIPs"
 METALLB_ADDRESS_POOL_ANNOTATION = "metallb.universe.tf/address-pool"
 METALLB_ALLOCATED_POOL_ANNOTATION = "metallb.universe.tf/ip-allocated-from-pool"
+METALLB_INTERNAL_POOL_NAME = "metallb-loadbalancer-ck-loadbalancer"
 
 CREDENTIAL_SUFFIX = "-creds"
 K8S_CLOUD_SUFFIX = "-k8s"
@@ -126,6 +127,11 @@ class K8SHelper:
     def get_loadbalancer_namespace(cls) -> str:
         """Return namespace for loadbalancer."""
         return "metallb-system"
+
+    @classmethod
+    def get_internal_pool_name(cls) -> str:
+        """Return internal pool name."""
+        return METALLB_INTERNAL_POOL_NAME
 
 
 def find_node(client: KubeClient, name: str) -> Node:

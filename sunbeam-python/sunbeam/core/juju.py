@@ -582,6 +582,20 @@ class JujuHelper:
         """
         return model.machines
 
+    async def get_machine_interfaces(self, model: str, machine: str) -> dict[str, dict]:
+        """Fetch machine interfaces.
+
+        :model: Name of the model where the machine is located
+        :machine: id of the machine
+        """
+        status = await self.get_model_status(model)
+        m_status = status["machines"].get(machine)
+        if machine is None:
+            raise MachineNotFoundException(
+                f"Machine {machine!r} is missing from model {model.name!r}"
+            )
+        return m_status["network-interfaces"]
+
     async def set_model_config(self, model: str, config: dict) -> None:
         """Set model config for the given model."""
         async with self.get_model_closing(model) as model_impl:
