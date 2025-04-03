@@ -1620,21 +1620,8 @@ class MaasConfigureMicrocephOSDStep(BaseStep):
                 }
             }
         """
-        try:
-            leader = await self.jhelper.get_leader_unit(
-                microceph.APPLICATION, self.model
-            )
-        except LeaderNotFoundException as e:
-            LOG.debug("Failed to find leader unit", exc_info=True)
-            raise ValueError(str(e))
-        osds, _ = await self._list_disks(leader)
         disks: dict[str, dict] = {}
         default_disk: dict[str, list[str]] = {"osds": [], "unpartitioned_disks": []}
-        for osd in osds:
-            location = osd["location"]  # machine name
-            disks.setdefault(location, copy.deepcopy(default_disk))["osds"].append(
-                osd["path"]
-            )
         async with self.jhelper.get_model_closing(self.model) as model:
             for name in self.names:
                 machine_id = str(self.client.cluster.get_node_info(name)["machineid"])
@@ -1646,10 +1633,15 @@ class MaasConfigureMicrocephOSDStep(BaseStep):
                         f"{microceph.APPLICATION}'s unit not found on {name}."
                         " Is microceph deployed on this machine?"
                     )
-                _, unit_unpartitioned_disks = await self._list_disks(unit.entity_id)
-                disks.setdefault(name, copy.deepcopy(default_disk))[
-                    "unpartitioned_disks"
-                ].extend(uud["path"] for uud in unit_unpartitioned_disks)
+                osd_disks, unit_unpartitioned_disks = await self._list_disks(
+                    unit.entity_id
+                )
+                disks.setdefault(name, copy.deepcopy(default_disk))["osds"].extend(
+                    osd["path"] for osd in osd_disks
+                )
+                disks[name]["unpartitioned_disks"].extend(
+                    uud["path"] for uud in unit_unpartitioned_disks
+                )
                 disks[name]["unit"] = unit.entity_id
 
         return disks

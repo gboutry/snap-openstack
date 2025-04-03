@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import copy
+import json
 from builtins import ConnectionRefusedError
 from ssl import SSLError
 from unittest.mock import AsyncMock, MagicMock, Mock
@@ -1099,14 +1101,12 @@ class TestMaasConfigureMicrocephOSDStep:
             ' {"location": "machine1", "path": "/dev/sdc"},'
             ' {"location": "machine2", "path": "/dev/sde"}]'
         )
-        leader_result = {
-            "osds": osds,
-            "unpartitioned-disks": '[{"path": "/dev/sdd"}]',
-        }
         jhelper.run_action = AsyncMock(
             side_effect=[
-                leader_result,
-                leader_result,
+                {
+                    "osds": (osds),
+                    "unpartitioned-disks": '[{"path": "/dev/sdd"}]',
+                },
                 {
                     "osds": (osds),
                     "unpartitioned-disks": '[{"path": "/dev/sdf"},'
@@ -1141,8 +1141,13 @@ class TestMaasConfigureMicrocephOSDStep:
         # Call the method under test
         result = await step._get_microceph_disks()
 
+        expected_osds = [osd["path"] for osd in json.loads(osds)]
+        expected_microceph_disks = copy.deepcopy(microceph_disks)
+        for unit, disks in expected_microceph_disks.items():
+            expected_microceph_disks[unit]["osds"] = expected_osds
+
         # Assert the result
-        assert result == microceph_disks
+        assert result == expected_microceph_disks
 
     @pytest.mark.asyncio
     async def test_list_disks(self, step, jhelper):
