@@ -10,6 +10,14 @@ from requests import codes
 from requests.models import HTTPError
 
 from sunbeam.clusterd import service
+from sunbeam.clusterd.models import (
+    CertPair,
+    JujuUser,
+    Manifest,
+    MemberStatus,
+    Node,
+    TerraformLock,
+)
 
 LOG = logging.getLogger(__name__)
 
@@ -108,12 +116,12 @@ class ExtendedAPIService(service.BaseService):
         }
         self._post("/1.0/nodes", data=json.dumps(data))
 
-    def list_nodes(self) -> list[dict]:
+    def list_nodes(self) -> list[Node]:
         """List all nodes."""
         nodes = self._get("/1.0/nodes")
         return nodes.get("metadata")
 
-    def get_node_info(self, name: str) -> dict:
+    def get_node_info(self, name: str) -> Node:
         """Fetch Node Information from a name."""
         return self._get(f"1.0/nodes/{name}").get("metadata")
 
@@ -137,7 +145,7 @@ class ExtendedAPIService(service.BaseService):
         data = {"username": name, "token": token}
         self._post("/1.0/jujuusers", data=json.dumps(data))
 
-    def list_juju_users(self) -> list:
+    def list_juju_users(self) -> list[JujuUser]:
         """List all juju users."""
         users = self._get("/1.0/jujuusers")
         return users.get("metadata")
@@ -146,7 +154,7 @@ class ExtendedAPIService(service.BaseService):
         """Remove Juju user from cluster database."""
         self._delete(f"1.0/jujuusers/{name}")
 
-    def get_juju_user(self, name: str) -> dict:
+    def get_juju_user(self, name: str) -> JujuUser:
         """Get Juju user from cluster database."""
         try:
             user = self._get(f"/1.0/jujuusers/{name}")
@@ -168,7 +176,7 @@ class ExtendedAPIService(service.BaseService):
         """Remove configuration from database."""
         self._delete(f"/1.0/config/{key}")
 
-    def list_nodes_by_role(self, role: Union[str, list[str]]) -> list:
+    def list_nodes_by_role(self, role: Union[str, list[str]]) -> list[Node]:
         """List nodes by role."""
         if isinstance(role, list):
             role = "&role=".join(role)
@@ -185,7 +193,7 @@ class ExtendedAPIService(service.BaseService):
         locks = self._get("/1.0/terraformlock")
         return locks.get("metadata")
 
-    def get_terraform_lock(self, plan: str) -> dict:
+    def get_terraform_lock(self, plan: str) -> TerraformLock:
         """Get lock information for plan."""
         lock = self._get(f"/1.0/terraformlock/{plan}")
         return json.loads(lock)
@@ -201,17 +209,17 @@ class ExtendedAPIService(service.BaseService):
         self._post("/1.0/manifests", data=json.dumps(content))
         return manifest_id
 
-    def list_manifests(self) -> list:
+    def list_manifests(self) -> list[Manifest]:
         """List all manifests."""
         manifests = self._get("/1.0/manifests")
         return manifests.get("metadata")
 
-    def get_manifest(self, manifest_id: str) -> dict:
+    def get_manifest(self, manifest_id: str) -> Manifest:
         """Get manifest info along with data."""
         manifest = self._get(f"/1.0/manifests/{manifest_id}")
         return manifest.get("metadata")
 
-    def get_latest_manifest(self) -> dict:
+    def get_latest_manifest(self) -> Manifest:
         """Get latest manifest."""
         return self.get_manifest("latest")
 
@@ -219,7 +227,7 @@ class ExtendedAPIService(service.BaseService):
         """Remove manifest from database."""
         self._delete(f"/1.0/manifest/{manifest_id}")
 
-    def get_server_certpair(self) -> dict:
+    def get_server_certpair(self) -> CertPair:
         """Fetch server certpair from cluster.
 
         This will always raise a 403 exception if not used over
@@ -227,7 +235,7 @@ class ExtendedAPIService(service.BaseService):
         """
         return self._get("/local/certpair/server", redact_response=True).get("metadata")
 
-    def get_status(self) -> dict[str, dict]:
+    def get_status(self) -> dict[str, MemberStatus]:
         """Get status of the cluster."""
         cluster = self._get("/1.0/status")
         members = cluster.get("metadata", {})
